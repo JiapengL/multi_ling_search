@@ -4,6 +4,7 @@ import torchvision.datasets as dsets
 import torchvision.transforms as transforms
 from torch.autograd import Variable
 import torch.nn.functional as F
+import numpy as np
 
 
 
@@ -30,6 +31,8 @@ def normalize(x):
    return x_normed
 
 class CDSSM(nn.Module):
+
+
     def __init__(self):
         super(CDSSM, self).__init__()
         # layers for query
@@ -40,6 +43,8 @@ class CDSSM(nn.Module):
         self.doc_sem = nn.Linear(K, L)
         # learning gamma
         self.learn_gamma = nn.Conv1d(1, 1, 1)
+
+
     def forward(self, q, pos, sre, negs):
         # Query model. The paper uses separate neural nets for queries and documents (see section 5.2).
         # To make it compatible with Conv layer we reshape it to: (batch_size, WORD_DEPTH, query_len)
@@ -103,73 +108,76 @@ class CDSSM(nn.Module):
         return pred_pos, pred_rs, pred_neg
 
 
-model = CDSSM()
+if __name__ == '__main__':
+    """
+    for debug purpose
+    """
 
-# Build a random data set.
-import numpy as np
+    model = CDSSM()
 
-sample_size = 10
-l_Qs = []
-pos_l_Ds = []
+    # Build a random data set.
+    sample_size = 10
+    l_Qs = []
+    pos_l_Ds = []
 
-(query_len, doc_len) = (5, 100)
+    (query_len, doc_len) = (5, 100)
 
-for i in range(sample_size):
-    query_len = np.random.randint(1, 10)
-    l_Q = np.random.rand(1, query_len, WORD_DEPTH)
-    l_Qs.append(l_Q)
+    for i in range(sample_size):
+        query_len = np.random.randint(1, 10)
+        l_Q = np.random.rand(1, query_len, WORD_DEPTH)
+        l_Qs.append(l_Q)
 
-    doc_len = np.random.randint(50, 500)
-    l_D = np.random.rand(1, doc_len, WORD_DEPTH)
-    pos_l_Ds.append(l_D)
+        doc_len = np.random.randint(50, 500)
+        l_D = np.random.rand(1, doc_len, WORD_DEPTH)
+        pos_l_Ds.append(l_D)
 
-# Generate negative and slightly relevant docs
-neg_l_Ds = [[] for j in range(NEG)]
-sr_l_Ds = [[] for j in range(SR)]
-for i in range(sample_size):
-    possibilities = list(range(sample_size))
-    possibilities.remove(i)
-    index =  np.random.choice(possibilities, NEG + SR, replace=False)
-    for j in range(NEG):
-        negative = index[j]
-        neg_l_Ds[j].append(pos_l_Ds[negative])
-    for k in range(SR):
-        sre = index[k + NEG]
-        sr_l_Ds[k].append(pos_l_Ds[sre])
+    # Generate negative and slightly relevant docs
+    neg_l_Ds = [[] for j in range(NEG)]
+    sr_l_Ds = [[] for j in range(SR)]
+    for i in range(sample_size):
+        possibilities = list(range(sample_size))
+        possibilities.remove(i)
+        index =  np.random.choice(possibilities, NEG + SR, replace=False)
+        for j in range(NEG):
+            negative = index[j]
+            neg_l_Ds[j].append(pos_l_Ds[negative])
+        for k in range(SR):
+            sre = index[k + NEG]
+            sr_l_Ds[k].append(pos_l_Ds[sre])
 
-# Till now, we have made a complete numpy dataset
-# Now let's convert the numpy variables to torch Variable
+    # Till now, we have made a complete numpy dataset
+    # Now let's convert the numpy variables to torch Variable
 
-for i in range(len(l_Qs)):
-    l_Qs[i] = Variable(torch.from_numpy(l_Qs[i]).float())
-    pos_l_Ds[i] = Variable(torch.from_numpy(pos_l_Ds[i]).float())
-    for j in range(NEG):
-        neg_l_Ds[j][i] = Variable(torch.from_numpy(neg_l_Ds[j][i]).float())
-    for k in range(SR):
-        sr_l_Ds[k][i] = Variable(torch.from_numpy(sr_l_Ds[k][i]).float())
+    for i in range(len(l_Qs)):
+        l_Qs[i] = Variable(torch.from_numpy(l_Qs[i]).float())
+        pos_l_Ds[i] = Variable(torch.from_numpy(pos_l_Ds[i]).float())
+        for j in range(NEG):
+            neg_l_Ds[j][i] = Variable(torch.from_numpy(neg_l_Ds[j][i]).float())
+        for k in range(SR):
+            sr_l_Ds[k][i] = Variable(torch.from_numpy(sr_l_Ds[k][i]).float())
 
-# Loss and optimizer
-criterion = torch.nn.CrossEntropyLoss()
-optimizer = torch.optim.SGD(model.parameters(), lr=1e-4, momentum=0.9)
-theta = [-1, -0.5, 0.5, 1]
+    # Loss and optimizer
+    criterion = torch.nn.CrossEntropyLoss()
+    optimizer = torch.optim.SGD(model.parameters(), lr=1e-4, momentum=0.9)
+    theta = [-1, -0.5, 0.5, 1]
 
-# output variable, remember the cosine similarity with positive doc was at 0th index
-y = np.ndarray(1) # CrossEntropyLoss expects only the index as a long tensor
-y[0] = 0
-y = Variable(torch.from_numpy(y).long())
+    # output variable, remember the cosine similarity with positive doc was at 0th index
+    y = np.ndarray(1) # CrossEntropyLoss expects only the index as a long tensor
+    y[0] = 0
+    y = Variable(torch.from_numpy(y).long())
 
 
-for i in range(sample_size):
-    pred_pos, pred_rs, pred_neg = model(l_Qs[i], pos_l_Ds[i], [sr_l_Ds[j][i] for j in range(SR)], [neg_l_Ds[j][i] for j in range(NEG)])
-    loss_pos =
-    loss_sr =
-    loss_neg =
-    loss = loss_pos + loss_sr + loss_neg
-    print(i, loss.data.item())
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
+    for i in range(sample_size):
+        pred_pos, pred_rs, pred_neg = model(l_Qs[i], pos_l_Ds[i], [sr_l_Ds[j][i] for j in range(SR)], [neg_l_Ds[j][i] for j in range(NEG)])
+        loss_pos =
+        loss_sr =
+        loss_neg =
+        loss = loss_pos + loss_sr + loss_neg
+        print(i, loss.data.item())
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
 
-for i in range(sample_size):
-    sre_ss, neg_ss, dots, dots1 = model(l_Qs[i], pos_l_Ds[i], [sr_l_Ds[j][i] for j in range(SR)], [neg_l_Ds[j][i] for j in range(NEG)])
-    print(dots1)
+    for i in range(sample_size):
+        sre_ss, neg_ss, dots, dots1 = model(l_Qs[i], pos_l_Ds[i], [sr_l_Ds[j][i] for j in range(SR)], [neg_l_Ds[j][i] for j in range(NEG)])
+        print(dots1)
