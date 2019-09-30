@@ -61,41 +61,32 @@ def main(args):
 
     # model setup
     if args.deep:
-        nn = DeepDSSM(args, len(vocab_q), len(vocab_d))
+        model = DeepDSSM(args, len(vocab_q), len(vocab_d))
     else:
-        nn = SimpleDSSM(args, len(vocab_q), len(vocab_d))
+        model = SimpleDSSM(args, len(vocab_q), len(vocab_d))
 
     # load embedding
     if args.load_embedding:
-        nn.load_embeddings(args, vocab_q, "query")
-        nn.load_embeddings(args, vocab_d, "document")
+        model.load_embeddings(args, vocab_q, "query")
+        model.load_embeddings(args, vocab_d, "document")
 
-    model = L.Classifier(nn, lossfun=F.hinge)
-    model.compute_accuracy = False
-    if args.gpu >= 0:
-        cuda.get_device(args.gpu).use()
-        model.to_gpu()
+    # optimizer setup
+    optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate, betas=(config.beta_1, config.beta_2), eps=config.epsilon)
 
-        # optimizer setup
-    if args.optimizer == "adagrad":
-        optimizer = O.AdaGrad(lr=0.05)
-    else:
-        optimizer = O.Adam()
-    optimizer.setup(model)
 
-    # converter setup
-    if args.encode_type == "lstm":
-        converter = converter_for_lstm
-    else:
-        converter = concat_examples
+    for epoch in range(1, 1+epoch_list):
 
-    # iterator, updater and trainer setup
-    train_iter = chainer.iterators.SerialIterator(data_processor.train_data, args.batchsize)
-    dev_iter = chainer.iterators.SerialIterator(data_processor.dev_data, args.batchsize, repeat=False, shuffle=False)
-    test_iter = chainer.iterators.SerialIterator(data_processor.test_data, args.batchsize, repeat=False, shuffle=False)
+        model.train()
+        for batch in batchs:
 
-    updater = training.StandardUpdater(train_iter, optimizer, converter=converter, device=args.gpu)
-    trainer = training.Trainer(updater, (args.epoch, 'epoch'), out=result_dest)
+            model.zero_grad()
+
+            loss = model.forward(batch)
+
+            loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
+            optimizer.step()
+
 
     model_path = '/'.join(args.model_path.split('/')[0:-1])+'/'
     model_epoch = args.model_path.split('/')[-1].split('_')[-1]
