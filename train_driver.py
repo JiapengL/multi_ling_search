@@ -3,26 +3,18 @@ import os
 import random
 import numpy as np
 import argparse
+from datetime import datetime
+import cPickle, json
 
 HOME = os.getenv("HOME")
-
-import chainer
-import chainer.links as L
-import chainer.optimizers as O
-import chainer.functions as F
-from chainer import training
-from chainer.training import extensions
-from chainer import cuda, serializers
-chainer.config.cudnn_deterministic = True
-from model.Network import SimpleDSSM, DeepDSSM, DataProcessor, RankingEvaluator
-from model.Network import converter_for_lstm, concat_examples
 
 import torch
 import torch.nn as nn
 import torch.nn.functional  as F
 
-from datetime import datetime
-import cPickle, json
+from src.margin_model import SimpleDSSM, DeepDSSM, DataProcessor, RankingEvaluator
+
+
 
 def main(args):
     random.seed(666)
@@ -88,61 +80,6 @@ def main(args):
             optimizer.step()
 
 
-    model_path = '/'.join(args.model_path.split('/')[0:-1])+'/'
-    model_epoch = args.model_path.split('/')[-1].split('_')[-1]
-    print 'model path = ',model_path
-
-    if args.load_snapshot:
-        print "loading snapshot..."
-        serializers.load_npz(model_path +'model_epoch_{}'.format(model_epoch), trainer)
-        print 'done'
-
-    if args.extract_parameter:
-        print 'extract parameter...'
-        serializers.load_npz(model_path +'model_epoch_{}'.format(model_epoch), trainer)
-        if args.deep:
-            p1 = model.predictor.l1
-            p2 = model.predictor.l2
-            p3 = model.predictor.l3
-            p4 = model.predictor.l4
-            serializers.save_npz(model_path+"l1.npz", p1)
-            serializers.save_npz(model_path+"l2.npz", p2)
-            serializers.save_npz(model_path+"l3.npz", p3)
-            serializers.save_npz(model_path+"l4.npz", p4)
-        p5 = model.predictor.conv_q
-        serializers.save_npz(model_path+"conv_q.npz", p5)
-        print 'done'
-        exit()
-
-    if args.load_parameter:
-        print "loading parameter..."
-        if args.deep:
-            p1 = model.predictor.l1
-            p2 = model.predictor.l2
-            p3 = model.predictor.l3
-            p4 = model.predictor.l4
-            serializers.load_npz(model_path+ "l1.npz", p1)
-            serializers.load_npz(model_path+ "l2.npz", p2)
-            serializers.load_npz(model_path+ "l3.npz", p3)
-            serializers.load_npz(model_path+ "l4.npz", p4)
-        p5 = model.predictor.conv_q
-        serializers.load_npz(model_path+ "conv_q.npz", p5)
-        print 'done'
-
-    # Evaluation setup
-    iters = {"dev": dev_iter, "test": test_iter}
-    trainer.extend(RankingEvaluator(iters, model, args, result_abs_dest, data_processor.n_test_qd_pairs, converter=converter, device=args.gpu))
-
-    # # Log reporter setup
-    trainer.extend(extensions.LogReport(log_name='log'))
-    trainer.extend(extensions.PrintReport(['epoch', 'main/loss', 'validation/main/loss_dev', 'validation/main/loss_test']))
-    trainer.extend(extensions.ProgressBar(update_interval=10))
-
-    # if not args.test:
-    trainer.extend(extensions.snapshot(filename='model_epoch_{.updater.epoch}'),
-        trigger=chainer.training.triggers.MinValueTrigger('validation/main/loss_dev'))
-
-    trainer.run()
 
 if __name__ == '__main__':
     parser=argparse.ArgumentParser()

@@ -15,12 +15,12 @@ class DataProcessor(object):
         self.dev_data_path = args.data_path+"data_en_{}_neg39/dev.txt".format(args.doc_lang)
         self.test_data_path = args.data_path+"data_en_{}_neg39/test1.txt".format(args.doc_lang)
         self.test = args.test # if true, use tiny datasets for quick test
-        self.cnn_ksize = args.cnn_ksize
+
         self.sub_sample_train = args.sub_sample_train
         self.sub_sample_data_limit = args.sub_sample_data_limit
         self.extract_parameter = args.extract_parameter
 
-        # Vocabulary for sentence pairs
+        # Build the vocabulary for sentence pairs
         # word2vec vocabulary: vocab outside this will be considered as <unk>
         print "loading vocabulary..."
         self.word2vec_vocab_q = self.load_vocab(args.vocab_path+"vocab_enwiki.txt", args.vocab_size)
@@ -56,7 +56,7 @@ class DataProcessor(object):
         # load train/dev/test data
         print "loading dataset..."
         self.train_data, _ = self.load_dataset_for_neg_sampled_data("train")
-        self.dev_data, self.n_dev_qd_pairs   = self.load_dataset_for_neg_sampled_data("dev")
+        self.dev_data, self.n_dev_qd_pairs = self.load_dataset_for_neg_sampled_data("dev")
         self.test_data, self.n_test_qd_pairs  = self.load_dataset_for_neg_sampled_data("test")
 
         if self.test:
@@ -117,14 +117,6 @@ class DataProcessor(object):
                         arg1 = [self.vocab_q[token] if token in self.word2vec_vocab_q else self.vocab_q["<unk>"] for token in query.strip('.').split()]
                         arg2 = [self.vocab_d[token] if token in self.word2vec_vocab_d else self.vocab_d["<unk>"] for token in doc_rel.split()]
                         arg3 = [self.vocab_d[token] if token in self.word2vec_vocab_d else self.vocab_d["<unk>"] for token in doc_nonrel.split()]
-
-                        if self.encode_type == "cnn":
-                            if len(arg1) < self.cnn_ksize:
-                                arg1 += [0 for _ in range(self.cnn_ksize-len(arg1))]
-                            if len(arg2) < self.cnn_ksize:
-                                arg2 += [0 for _ in range(self.cnn_ksize-len(arg2))]
-                            if len(arg3) < self.cnn_ksize:
-                                arg3 += [0 for _ in range(self.cnn_ksize-len(arg3))]
 
                         x1s = np.array(arg1, dtype=np.int32)
                         x2s = np.array(arg2, dtype=np.int32)
