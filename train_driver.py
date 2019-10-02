@@ -3,195 +3,107 @@ import os
 import random
 import numpy as np
 import argparse
+from datetime import datetime
+import pickle, json
 
 HOME = os.getenv("HOME")
-
-import chainer
-import chainer.links as L
-import chainer.optimizers as O
-import chainer.functions as F
-from chainer import training
-from chainer.training import extensions
-from chainer import cuda, serializers
-chainer.config.cudnn_deterministic = True
-from model.Network import SimpleDSSM, DeepDSSM, DataProcessor, RankingEvaluator
-from model.Network import converter_for_lstm, concat_examples
 
 import torch
 import torch.nn as nn
 import torch.nn.functional  as F
 
-from datetime import datetime
-import cPickle, json
+from src.dssm_model import SimpleDSSM, DeepDSSM
+from src.dt_processor import DataProcessor
+from src.utils import numerize
 
-def main(args):
+import pdb
+
+
+def run(args):
     random.seed(666)
     np.random.seed(666)
     torch.cuda.manual_seed(666)
     torch.manual_seed(666)
 
-    if args.gpu >= 0 and torch.cuda.is_available():
-        t = np.array([0], dtype=np.int32)
-        tmp = torch.from_numpy(t).cuda()
-
-    # setup result directory
-    start_time = datetime.now().strftime('%Y%m%d_%H_%M_%S')
-    if args.test:
-        start_time = "test_" + start_time
-    result_dest = HOME + "/clir/sep_encode_model/result/"+start_time
-    result_abs_dest = os.path.abspath(result_dest)
-    if not args.extract_parameter:
-        os.makedirs(result_dest)
-        with open(os.path.join(result_abs_dest, "settings.json"), "w") as fo:
-            fo.write(json.dumps(vars(args), sort_keys=True, indent=4))
-
     # data setup
     data_processor = DataProcessor(args)
-    data_processor.prepare_dataset()
-    vocab_q = data_processor.vocab_q
-    vocab_d = data_processor.vocab_d
-
-    if args.create_vocabulary:
-        print 'dump'
-        with open(args.vocab_path+"en_{}_vocab_for_index.txt".format(args.doc_lang),"wb") as f_q,\
-             open(args.vocab_path+"{}_vocab_for_index.txt".format(args.doc_lang),'wb') as f_d:
-            cPickle.dump(dict(vocab_q), f_q)
-            cPickle.dump(dict(vocab_d), f_d)
-        print 'done'
+    vocab_q, vocab_d = data_processor.build_vocab()
 
     # model setup
     if args.deep:
-        nn = DeepDSSM(args, len(vocab_q), len(vocab_d))
+        model = DeepDSSM(args, len(vocab_q), len(vocab_d))
     else:
-        nn = SimpleDSSM(args, len(vocab_q), len(vocab_d))
+        model = SimpleDSSM(args, len(vocab_q), len(vocab_d))
 
     # load embedding
-    if args.load_embedding:
-        nn.load_embeddings(args, vocab_q, "query")
-        nn.load_embeddings(args, vocab_d, "document")
+    if args.q_extn_embedding:
+        model.load_embeddings(args, vocab_q, "query")
+    if args.d_extn_embedding:
+        model.load_embeddings(args, vocab_d, "document")
 
-    model = L.Classifier(nn, lossfun=F.hinge)
-    model.compute_accuracy = False
-    if args.gpu >= 0:
-        cuda.get_device(args.gpu).use()
-        model.to_gpu()
+    # optimizer setup
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
-        # optimizer setup
-    if args.optimizer == "adagrad":
-        optimizer = O.AdaGrad(lr=0.05)
-    else:
-        optimizer = O.Adam()
-    optimizer.setup(model)
 
-    # converter setup
-    if args.encode_type == "lstm":
-        converter = converter_for_lstm
-    else:
-        converter = concat_examples
+    for epoch in range(1, 1+args.epochs):
 
-    # iterator, updater and trainer setup
-    train_iter = chainer.iterators.SerialIterator(data_processor.train_data, args.batchsize)
-    dev_iter = chainer.iterators.SerialIterator(data_processor.dev_data, args.batchsize, repeat=False, shuffle=False)
-    test_iter = chainer.iterators.SerialIterator(data_processor.test_data, args.batchsize, repeat=False, shuffle=False)
+        model.train()
+        for batch in data_processor.generate_train_batch(args.train_batchsize, args.is_shuffle):
 
-    updater = training.StandardUpdater(train_iter, optimizer, converter=converter, device=args.gpu)
-    trainer = training.Trainer(updater, (args.epoch, 'epoch'), out=result_dest)
+            rels, qs, ds = numerize(batch, vocab_q, vocab_d)
 
-    model_path = '/'.join(args.model_path.split('/')[0:-1])+'/'
-    model_epoch = args.model_path.split('/')[-1].split('_')[-1]
-    print 'model path = ',model_path
+            sims = model.forward(qs, ds, rels)
 
-    if args.load_snapshot:
-        print "loading snapshot..."
-        serializers.load_npz(model_path +'model_epoch_{}'.format(model_epoch), trainer)
-        print 'done'
+            # pdb.set_trace()
+            """
+            model.zero_grad()
 
-    if args.extract_parameter:
-        print 'extract parameter...'
-        serializers.load_npz(model_path +'model_epoch_{}'.format(model_epoch), trainer)
-        if args.deep:
-            p1 = model.predictor.l1
-            p2 = model.predictor.l2
-            p3 = model.predictor.l3
-            p4 = model.predictor.l4
-            serializers.save_npz(model_path+"l1.npz", p1)
-            serializers.save_npz(model_path+"l2.npz", p2)
-            serializers.save_npz(model_path+"l3.npz", p3)
-            serializers.save_npz(model_path+"l4.npz", p4)
-        p5 = model.predictor.conv_q
-        serializers.save_npz(model_path+"conv_q.npz", p5)
-        print 'done'
-        exit()
+            loss = model.cal_loss(batch)
 
-    if args.load_parameter:
-        print "loading parameter..."
-        if args.deep:
-            p1 = model.predictor.l1
-            p2 = model.predictor.l2
-            p3 = model.predictor.l3
-            p4 = model.predictor.l4
-            serializers.load_npz(model_path+ "l1.npz", p1)
-            serializers.load_npz(model_path+ "l2.npz", p2)
-            serializers.load_npz(model_path+ "l3.npz", p3)
-            serializers.load_npz(model_path+ "l4.npz", p4)
-        p5 = model.predictor.conv_q
-        serializers.load_npz(model_path+ "conv_q.npz", p5)
-        print 'done'
+            loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
+            optimizer.step()
+            """
 
-    # Evaluation setup
-    iters = {"dev": dev_iter, "test": test_iter}
-    trainer.extend(RankingEvaluator(iters, model, args, result_abs_dest, data_processor.n_test_qd_pairs, converter=converter, device=args.gpu))
 
-    # # Log reporter setup
-    trainer.extend(extensions.LogReport(log_name='log'))
-    trainer.extend(extensions.PrintReport(['epoch', 'main/loss', 'validation/main/loss_dev', 'validation/main/loss_test']))
-    trainer.extend(extensions.ProgressBar(update_interval=10))
+        # todo: evaluate on the dev set
+        # todo: decay learning rate
 
-    # if not args.test:
-    trainer.extend(extensions.snapshot(filename='model_epoch_{.updater.epoch}'),
-        trigger=chainer.training.triggers.MinValueTrigger('validation/main/loss_dev'))
+    # todo: evaluate on the final test set
 
-    trainer.run()
+
 
 if __name__ == '__main__':
     parser=argparse.ArgumentParser()
-    parser.add_argument('--gpu  ', dest='gpu', type=int,default=-1, help='negative value indicates CPU')
 
-    # training parameter
-    parser.add_argument('--epoch', dest='epoch', type=int,default=5, help='number of epochs to learn')
-    parser.add_argument('--batchsize', dest='batchsize', type=int,default=32, help='learning minibatch size')
-    parser.add_argument('--doc_lang', dest='doc_lang', type=str, default="ja")
-    parser.add_argument('--encode_type', dest='encode_type', type=str, default="cnn")
-    parser.add_argument('--op', dest='optimizer', type=str, default="adam")
-    parser.add_argument('--sub_sample_data_limit', type=int, default=31716, help='')
+    # data
+    parser.add_argument('--train_file', dest='train_file', type=str, default='toy_eng_data/train.csv', help='path to training file')
+    parser.add_argument('--dev_file', dest='dev_file', type=str, default='toy_eng_data/dev.csv', help='path to development file')
+    parser.add_argument('--test_file', dest='test_file', type=str, default='toy_eng_data/test.csv', help='path to test file')
 
-    # training flag
+    # embeddings
+    parser.add_argument('--q_extn_embedding', dest='q_extn_embedding', type=str, default='', help='path to pre-trained embedding for queries')
+    parser.add_argument('--d_extn_embedding', dest='d_extn_embedding', type=str, default='', help='path to pre-trained embedding for documents')
+
+    # training
+    parser.add_argument('--use_gpu', dest='use_gpu', action='store_true', help='whether to use gpu')
+    parser.add_argument('--epochs', dest='epochs', type=int, default=50, help='number of epochs to run')
+    parser.add_argument('--train_batchsize', dest='train_batchsize', type=int,default=32, help='training minibatch size')
+    parser.add_argument('--test_batchsize', dest='test_batchsize', type=int,default=32, help='testing minibatch size')
+    parser.add_argument('--is_shuffle', dest='is_shuffle', action='store_true', help='whether to shuffle training set each epoch')
+    parser.add_argument('--optimizer', dest='optimizer', type=str, default="adam")
+    parser.add_argument('--lr', dest='lr', type=float, default=0.01, help='initial learning rate')
+    parser.add_argument('--clip_grad', dest='clip_grad', type=float, default=5.0, help='clip grad at')
+    parser.add_argument('--caseless', dest='caseless', action='store_true', help='caseless or not')
+
+    # neural model
     parser.add_argument('--deep', action='store_true', help='')
-    parser.add_argument('--load_embedding', action='store_true', help='')
-    parser.add_argument('--load_parameter', action='store_true', help='')
-    parser.add_argument('--load_snapshot', action='store_true', help='')
-    parser.add_argument('--weighted_sum', action='store_true', help='')
-    parser.add_argument('--sub_sample_train', action='store_true', help='')
-    parser.add_argument('--test', action='store_true', help='use tiny dataset')
-
-    # other flag
-    parser.add_argument('--create_vocabulary', action='store_true', help='')
-    parser.add_argument('--extract_parameter', action='store_true', help='')
-
-    # model parameter
-    parser.add_argument('--n_layer', dest='n_layer', type=int, default=2, help='# of layer')
     parser.add_argument('--n_hdim', dest='n_hdim', type=int, default=200, help='dimension of hidden layer')
-    parser.add_argument('--vocab_size', dest='vocab_size', type=int, default=100000, help='')
-    parser.add_argument('--cnn_out_channels', dest='cnn_out_channels', type=int, default=100, help='')
-    parser.add_argument('--cnn_ksize', dest='cnn_ksize', type=int, default=4, help='')
-    parser.add_argument('--embed_dim', dest='embed_dim', type=int, default=100, help='# of layer')
+    parser.add_argument('--embed_dim', dest='embed_dim', type=int, default=100, help='dimension of the embedding')
 
-    # data path
-    parser.add_argument('--vocab_path', dest='vocab_path', type=str, default=HOME+"/clir/vocab/")
-    parser.add_argument('--data_path', dest='data_path', type=str,default="/export/a13/shota/clir/")
-    parser.add_argument('--vec_path', dest='vec_path', type=str, default=HOME+"/word2vec/trunk/")
+    # save
     parser.add_argument('--model_path', dest='model_path', type=str, default='')
     args = parser.parse_args()
-    main(args)
+    run(args)
 
 
