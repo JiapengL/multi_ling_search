@@ -46,7 +46,16 @@ class SimpleDSSM(nn.Module):
         pass
 
     def load_embeddings(self, args, vocab, _type):
-        # load query language embeding and doc language embedding as model parameters
+        """
+        load query language embeding and doc language embedding as model parameters
+
+        args:
+            args: argparser object
+            vocab: vocab dictionary
+            _type: queries or documents
+        Retun:
+            None
+        """
 
         if _type == "query":
             vec_path = args.q_embed_file
