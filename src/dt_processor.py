@@ -1,132 +1,94 @@
 # -*- coding: utf-8 -*-
 import os
-import sys
 import json
 import numpy as np
-import cPickle
+import pickle
 from collections import defaultdict
-from itertools import groupby
+import math
+
 from tqdm import tqdm
+from nltk.tokenize import sent_tokenize, word_tokenize
+
+import pdb
 
 class DataProcessor(object):
 
     def __init__(self, args):
-        self.train_data_path = args.data_path+"data_en_{}_neg4/train.txt".format(args.doc_lang)
-        self.dev_data_path = args.data_path+"data_en_{}_neg39/dev.txt".format(args.doc_lang)
-        self.test_data_path = args.data_path+"data_en_{}_neg39/test1.txt".format(args.doc_lang)
-        self.test = args.test # if true, use tiny datasets for quick test
 
-        self.sub_sample_train = args.sub_sample_train
-        self.sub_sample_data_limit = args.sub_sample_data_limit
-        self.extract_parameter = args.extract_parameter
+        self.caseless = args.caseless
+        self.raw_train = self._build_data(args.train_file, args.caseless)
+        self.raw_dev = self._build_data(args.dev_file, args.caseless)
+        self.raw_test = self._build_data(args.test_file, args.caseless)
 
-        # Build the vocabulary for sentence pairs
-        # word2vec vocabulary: vocab outside this will be considered as <unk>
-        print "loading vocabulary..."
-        self.word2vec_vocab_q = self.load_vocab(args.vocab_path+"vocab_enwiki.txt", args.vocab_size)
-        self.word2vec_vocab_d = self.load_vocab(args.vocab_path+"vocab_"+args.doc_lang+"wiki.txt", args.vocab_size)
-        print "done"
 
-        if args.create_vocabulary:
-            self.vocab_q = defaultdict(lambda: len(self.vocab_q))
-            self.vocab_q["<pad>"]
-            self.vocab_q["<unk>"]
-            self.vocab_d = defaultdict(lambda: len(self.vocab_d))
-            self.vocab_d["<pad>"]
-            self.vocab_d["<unk>"]
-        else:
-            print 'load vocab from cPickle'
-            with open(args.vocab_path+"en_{}_vocab_for_index.txt".format(args.doc_lang),"rb") as f_q,\
-                 open(args.vocab_path+"{}_vocab_for_index.txt".format(args.doc_lang),"rb") as f_d:
-                self.vocab_q = cPickle.load(f_q)
-                self.vocab_d = cPickle.load(f_d)
-            print 'done'
+    def build_vocab(self):
+        """Build the vocabulary for sentence pairs in the training set, vocab outside this will be considered as <unk>
+        """
 
-        self.device = args.gpu
-        self.encode_type = args.encode_type
+        q_vocab = defaultdict(int)
+        q_vocab["<pad>"] = len(q_vocab)
+        q_vocab["<unk>"] = len(q_vocab)
 
-    def load_vocab(self, path, size):
-        vocab = {}
-        for i, w in enumerate(open(path, "r")):
-            if i < size:
-                vocab[w.strip()] = 1
-        return vocab
+        d_vocab = defaultdict(int)
+        d_vocab["<pad>"] = len(d_vocab)
+        d_vocab["<unk>"] = len(d_vocab)
 
-    def prepare_dataset(self):
-        # load train/dev/test data
-        print "loading dataset..."
-        self.train_data, _ = self.load_dataset_for_neg_sampled_data("train")
-        self.dev_data, self.n_dev_qd_pairs = self.load_dataset_for_neg_sampled_data("dev")
-        self.test_data, self.n_test_qd_pairs  = self.load_dataset_for_neg_sampled_data("test")
+        for line in self.raw_train:
+            _, q_text, d_text = line[0], line[1], line[2]
+            for qtk in q_text:
+                tok = qtk.lower() if self.caseless else qtk
+                if tok not in q_vocab:
+                    q_vocab[tok] = len(q_vocab)
+            for dtk in d_text:
+                tok = dtk.lower() if self.caseless else dtk
+                if tok not in d_vocab:
+                    d_vocab[tok] = len(d_vocab)
+        return q_vocab, d_vocab
 
-        if self.test:
-            print "tiny dataset for quick test..."
-        print "done"
+    def _build_data(self, data_path, caseless):
 
-    def load_dataset_for_neg_sampled_data(self, _type):
+        data_ls = []
+        with open(data_path, "r", encoding="utf-8") as f:
+            for line in f.readlines():
+                rel, q_text_s, d_text_s = line.strip('\n').split('\t')
+                q_text, d_text = word_tokenize(q_text_s), word_tokenize(d_text_s)
 
-        data_limit = 10
-        if _type == "train":
-            path = self.train_data_path
-            data_limit = 32
-            if self.sub_sample_train:
-                data_limit = self.sub_sample_data_limit
-            # data_limit = 20
-        elif _type == "dev":
-            path = self.dev_data_path
-        elif _type == "test":
-            path = self.test_data_path
+                if caseless:
+                    q_text = [t.lower() for t in q_text]
+                    d_text = [t.lower() for t in d_text]
 
-        dataset = []
+                data_ls.append([rel, q_text, d_text])
 
-        if not(self.test):
-            with open(path, "r") as input_data:
-                total_line = len([0 for _ in  input_data])
-        else:
-            total_line = 0
+        return data_ls
 
-        n_qd_pairs = []
-        count = 0
-        with open(path, "r") as input_data:
-            # for i, line in tqdm(enumerate(input_data), total=total_line):
-            for i, line in enumerate(input_data):
-                rel, query, doc = line.strip().split("\t")
+    def generate_train_batch(self, batch_size, is_shuffle=False):
 
-                if rel == str(2):
-                    if i != 0:
-                        n_qd_pairs.append(count)
-                        count = 0
-                    if self.test and len(dataset) >= data_limit:
-                        break
-                    if self.sub_sample_train and _type == 'train' and len(dataset) >= data_limit:
-                        break
-                    first_line_query = query
-                    doc_rel = doc
-                else:
-                    count += 1
-                    assert first_line_query == query
-                    assert rel == str(0)
-                    doc_nonrel = doc
+        data_ls = self.raw_train
+        if is_shuffle:
+            random.shuffle(data_ls)
 
-                    # convert text data to index data as numpy array
-                    if self.extract_parameter:
-                        x1s = np.array([1,0], dtype=np.int32)
-                        x2s = np.array([1,0], dtype=np.int32)
-                        x3s = np.array([0,0], dtype=np.int32)
-                    else:
-                        arg1 = [self.vocab_q[token] if token in self.word2vec_vocab_q else self.vocab_q["<unk>"] for token in query.strip('.').split()]
-                        arg2 = [self.vocab_d[token] if token in self.word2vec_vocab_d else self.vocab_d["<unk>"] for token in doc_rel.split()]
-                        arg3 = [self.vocab_d[token] if token in self.word2vec_vocab_d else self.vocab_d["<unk>"] for token in doc_nonrel.split()]
+        ttl_bn = int(math.ceil(len(data_ls)*1.0/batch_size))
 
-                        x1s = np.array(arg1, dtype=np.int32)
-                        x2s = np.array(arg2, dtype=np.int32)
-                        x3s = np.array(arg3, dtype=np.int32)
+        for bn in range(ttl_bn):
 
-                    t = np.array([0], dtype=np.int32)
+            yield data_ls[(bn*batch_size):(bn+1)*batch_size]
 
-                    dataset.append((x1s, x2s, x3s, t))
+    def generate_dev_batch(self, batch_size):
 
-            else:
-                n_qd_pairs.append(count)
+        data_ls = self.raw_dev
 
-        return dataset, n_qd_pairs
+        ttl_bn = int(math.ceil(len(data_ls)*1.0/batch_size))
+
+        for bn in range(ttl_bn):
+
+            yield data_ls[(bn*batch_size):(bn+1)*batch_size]
+
+    def generate_test_batch(self, batch_size):
+
+        data_ls = self.raw_test
+
+        ttl_bn = int(math.ceil(len(data_ls)*1.0/batch_size))
+
+        for bn in range(ttl_bn):
+
+            yield data_ls[(bn*batch_size):(bn+1)*batch_size]
