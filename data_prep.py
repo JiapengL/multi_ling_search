@@ -9,7 +9,12 @@ from tqdm import tqdm
 
 import pdb
 
+
+
 def create_query_doc_dict(rel_path):
+    """Create the dictionary for index of (query, doc) pairs from relevance file.
+    Only relevant and slightly relevant pairs are included as the relevance file.
+    """
 
     rel_dict = defaultdict(dict)
 
@@ -31,6 +36,8 @@ def create_query_doc_dict(rel_path):
 
 
 def create_query_text_dict(query_path):
+    """Create the dictionary for query text.
+    """
 
     query_dict = dict()
 
@@ -41,7 +48,10 @@ def create_query_text_dict(query_path):
 
     return query_dict
 
+
 def create_doc_text_dict(doc_path):
+    """Create the dictionary for doc text.
+    """
 
     doc_dict = dict()
 
@@ -53,23 +63,29 @@ def create_doc_text_dict(doc_path):
 
     return doc_dict
 
-def divide_queries(rel_dict):
 
-    all_queries = set([q_id for q_id, v in rel_dict.items()])
-    # all_queries = set([q_id for q_id, v in rel_dict.items()][:100])
+
+def divide_queries(rel_dict):
+    """Create training queries, dev queries and test queries, from the whole query set.
+    """
+
+    #all_queries = set([q_id for q_id, v in rel_dict.items()])
+    all_queries = set([q_id for q_id, v in rel_dict.items()][:10])
     test_q_num = int(len(all_queries)*0.2)
 
     test_queries = set(random.sample(all_queries, k=test_q_num))
 
-    remain_queries = all_queries-test_queries
+    remain_queries = all_queries - test_queries
     dev_queries = set(random.sample(remain_queries, k=test_q_num))
 
     train_queries = remain_queries - dev_queries
 
     return train_queries, dev_queries, test_queries
 
-def sample_neg(query_set, rel_dict, d_dict, k):
 
+def sample_neg(query_set, rel_dict, d_dict, k):
+    """Sample negative documents.
+    """
 
     all_docs = set([d_id for d_id, v in d_dict.items()])
 
@@ -89,6 +105,9 @@ def sample_neg(query_set, rel_dict, d_dict, k):
 
 
 def create_dataset(query_set, rel_dict, query_dict, doc_dict, _path):
+    """Create the (relevance score, query text, doc text) dataset.
+    For the relevance score, use 2 represents relevant, 1 to be slightly relevant and 0 be not relevant.
+    """
 
     with open(_path, 'w') as f:
 
@@ -110,12 +129,12 @@ def main():
 
     random.seed(666)
 
-    parser=argparse.ArgumentParser()
-    parser.add_argument('--query_path', dest='query_path', type=str, default="english/wiki_en.queries")
-    parser.add_argument('--doc_path', dest='doc_path', type=str, default="simple_english/wiki_en.documents")
-    parser.add_argument('--rel_path', dest='rel_path', type=str, default="simple_english/en2simple.rel")
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--query_path', dest='query_path', type=str, default="/Users/jiapengliu/Document/Project/raw_data/wiki-clir/english/wiki_en.queries")
+    parser.add_argument('--doc_path', dest='doc_path', type=str, default="/Users/jiapengliu/Document/Project/raw_data/wiki-clir/french/wiki_fr.documents")
+    parser.add_argument('--rel_path', dest='rel_path', type=str, default="/Users/jiapengliu/Document/Project/raw_data/wiki-clir/french/en2fr.rel")
     parser.add_argument('--train_negsample', dest='train_negsample', type=int, default=4)
-    parser.add_argument('--test_negsample', dest='test_negsample', type=int, default=39)
+    parser.add_argument('--test_negsample', dest='test_negsample', type=int, default=10)
 
     args = parser.parse_args()
 

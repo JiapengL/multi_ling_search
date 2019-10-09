@@ -46,6 +46,8 @@ class DataProcessor(object):
         return q_vocab, d_vocab
 
     def _build_data(self, data_path, caseless):
+        """Build the token dataset for sentence pairs, each data point is represented by (relevance score, query_text, doc_text)
+        """
 
         data_ls = []
         with open(data_path, "r", encoding="utf-8") as f:
@@ -62,6 +64,8 @@ class DataProcessor(object):
         return data_ls
 
     def generate_train_batch(self, batch_size, is_shuffle=False):
+        """Generate the batch of raw training dataset
+        """
 
         data_ls = self.raw_train
         if is_shuffle:
@@ -74,6 +78,8 @@ class DataProcessor(object):
             yield data_ls[(bn*batch_size):(bn+1)*batch_size]
 
     def generate_dev_batch(self, batch_size):
+        """Generate the batch of raw dev dataset
+        """
 
         data_ls = self.raw_dev
 
@@ -84,6 +90,8 @@ class DataProcessor(object):
             yield data_ls[(bn*batch_size):(bn+1)*batch_size]
 
     def generate_test_batch(self, batch_size):
+        """Generate the batch of raw test dataset
+        """
 
         data_ls = self.raw_test
 
@@ -92,3 +100,25 @@ class DataProcessor(object):
         for bn in range(ttl_bn):
 
             yield data_ls[(bn*batch_size):(bn+1)*batch_size]
+
+    def generate_eval_index(self):
+
+        n_qd_pairs = []
+        index = []
+        count = 0
+
+        data_ls = self.raw_dev
+        for i, line in enumerate(data_ls):
+            count += 1
+            rel = int(line[0])
+            if rel == 2:
+                if i != 0:
+                    n_qd_pairs.append(count)
+                    index.append(rels_vector)
+                    rels_vector = [rel]
+                else:
+                    rels_vector = [rel]
+
+            else:
+                rels_vector.append(rel)
+        return n_qd_pairs, index

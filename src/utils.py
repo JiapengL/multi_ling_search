@@ -5,7 +5,10 @@ import numpy as np
 import torch
 
 def pad_convert(sent, vocab, max_l, pad_type="back"):
+    """
+    padding embeddings for non-equal length of sentences
 
+    """
     num_st = [vocab[t] if t in vocab else vocab["<unk>"] for t in sent]
 
     if pad_type=="front":
@@ -24,6 +27,10 @@ def pad_convert(sent, vocab, max_l, pad_type="back"):
 
 
 def numerize(batch, q_vocab, d_vocab, pad_type="back"):
+    """
+    numerize query and docs to embeddings
+    return: relevance score, query embedding, doc embedding
+    """
 
     labels = [int(pair[0]) for pair in batch]
 
