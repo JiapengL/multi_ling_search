@@ -49,8 +49,8 @@ def run(args):
     dev_set = data_processor.raw_dev
     rels_dev, qs_dev, ds_dev = numerize(dev_set, vocab_q, vocab_d)
     n_qd_pairs, index = data_processor.generate_eval_index()
-    print(n_qd_pairs, len(index[0]), len(dev_set))
-    print(dev_set[0])
+    # print(n_qd_pairs, len(index[0]), len(dev_set))
+    # print(dev_set[0])
 """
     for epoch in range(1, 1+args.epochs):
         model.train()
@@ -88,12 +88,11 @@ if __name__ == '__main__':
     parser=argparse.ArgumentParser()
 
     # data
-    parser.add_argument('--train_file', dest='train_file', type=str, default='data_eng__french/train.csv', help='path to training file')
-    parser.add_argument('--dev_file', dest='dev_file', type=str, default='data_eng__french/dev.csv', help='path to development file')
-    parser.add_argument('--test_file', dest='test_file', type=str, default='data_eng__french/test.csv', help='path to test file')
+    parser.add_argument('--train_file', dest='train_file', type=str, default='toy_eng_data/train.csv', help='path to training file')
+    parser.add_argument('--dev_file', dest='dev_file', type=str, default='toy_eng_data/dev.csv', help='path to development file')
+    parser.add_argument('--test_file', dest='test_file', type=str, default='toy_eng_data/test.csv', help='path to test file')
 
     # embeddings
-    parser.add_argument('--extn_embedding', action='store_true', help='whether to use pre-trained embeddings')
     parser.add_argument('--q_extn_embedding', dest='q_extn_embedding', type=str, default='', help='path to pre-trained embedding for queries')
     parser.add_argument('--d_extn_embedding', dest='d_extn_embedding', type=str, default='', help='path to pre-trained embedding for documents')
 

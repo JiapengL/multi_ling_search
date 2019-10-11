@@ -4,6 +4,7 @@ Author: Cosmo Zhang
 
 # -*- coding: utf-8 -*-
 import sys
+import pickle as pkl
 
 import numpy as np
 import pickle
@@ -54,39 +55,43 @@ class SimpleDSSM(nn.Module):
         Return:
             None
         """
-        if args.extn_embedding:
-             with open(args.q_extn_embedding, "rb") as f_q, \
-                  open(args.d_extn_embedding, "rb") as f_d:
-                self.q_word_embeds = pickle.load(f_q,  encoding='latin1')
-                self.q_word_embeds = pickle.load(f_d, encoding='latin1')
 
+        if _type == "query":
+            vec_path = args.q_extn_embedding
+        elif _type == "document":
+            vec_path = args.d_extn_embedding
         else:
-            if _type == "query":
-                vec_path = args.q_embed_file
-            elif _type == "document":
-                vec_path = args.d_embed_file
-            else:
-                sys.exit("Unknown embedding type")
+            sys.exit("Unknown embedding type")
 
-            temp_tensor = torch.randn(len(vocab), args.embedding_dim)
+        temp_tensor = torch.randn(len(vocab), args.embed_dim)
 
+        if vec_path:
             print("loading " +_type+ " embeddings...")
-            with open(vec_path, "r") as fi:
-                for n, line in enumerate(fi.readlines()):
-                    # 1st line contains stats
-                    if n == 0:
-                        continue
-                    line_list = line.strip().split(" ", 1)
-                    word = line_list[0].lower() if args.caseless else line_list[0]
-                    if word in vocab:
-                        value = line.strip().split(" ")[1::]
-                        vec = np.fromstring(value, dtype=float, sep=' ')
-                        temp_tensor[vocab[word]] = nn.Parameter(torch.from_numpy(vec))
+            if vec_path.endswith('.txt'):
+                with open(vec_path, "r") as fi:
+                    for n, line in enumerate(fi.readlines()):
+                        # 1st line contains stats
+                        if n == 0:
+                            continue
+                        line_list = line.strip().split(" ", 1)
+                        word = line_list[0].lower() if args.caseless else line_list[0]
+                        if word in vocab:
+                            value = line.strip().split(" ")[1::]
+                            vec = np.fromstring(value, dtype=float, sep=' ')
+                            temp_tensor[vocab[word]] = nn.Parameter(torch.from_numpy(vec))
+            elif vec_path.endswith('.pkl'):
+                with open(vec_path, 'rb') as f:
+                    words, vecs = pkl.load(f)
+                    for word, vec in zip(words, vecs):
+                        word = word.lower() if args.caseless else word
+                        if word in vocab:
+                            temp_tensor[vocab[word]] = nn.Parameter(torch.from_numpy(vec))
 
-            if _type == "query":
-                self.q_word_embeds = nn.Embedding.from_pretrained(temp_tensor)
-            elif _type == "document":
-                self.d_word_embeds = nn.Embedding.from_pretrained(temp_tensor)
+
+        if _type == "query":
+            self.q_word_embeds = nn.Embedding.from_pretrained(temp_tensor)
+        elif _type == "document":
+            self.d_word_embeds = nn.Embedding.from_pretrained(temp_tensor)
 
         print("Successfully loaded embeddings.")
 
