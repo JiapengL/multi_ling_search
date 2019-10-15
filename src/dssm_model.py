@@ -67,20 +67,26 @@ class SimpleDSSM(nn.Module):
                         if word in vocab:
                             value = line.strip().split(" ")[1::]
                             vec = np.fromstring(value, dtype=float, sep=' ')
-                            temp_tensor[vocab[word]] = nn.Parameter(torch.from_numpy(vec))
+                            temp_tensor[vocab[word]] = torch.from_numpy(vec)
             elif vec_path.endswith('.pkl'):
                 with open(vec_path, 'rb') as f:
                     words, vecs = pkl.load(f)
                     for word, vec in zip(words, vecs):
                         word = word.lower() if args.caseless else word
                         if word in vocab:
-                            temp_tensor[vocab[word]] = nn.Parameter(torch.from_numpy(vec))
+                            temp_tensor[vocab[word]] = torch.from_numpy(vec)
 
 
         if _type == "query":
-            self.q_word_embeds = nn.Embedding.from_pretrained(temp_tensor)
+            if self.args.fine_tune:
+                self.q_word_embeds = nn.Embedding.from_pretrained(temp_tensor, freeze=False)
+            else:
+                self.q_word_embeds = nn.Embedding.from_pretrained(temp_tensor, freeze=False)
         elif _type == "document":
-            self.d_word_embeds = nn.Embedding.from_pretrained(temp_tensor)
+            if self.args.fine_tune:
+                self.q_word_embeds = nn.Embedding.from_pretrained(temp_tensor)
+            else:
+                self.d_word_embeds = nn.Embedding.from_pretrained(temp_tensor)
 
         print("Successfully loaded embeddings.")
 

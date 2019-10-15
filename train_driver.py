@@ -57,7 +57,7 @@ def run(args):
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     """
-    
+
     n_qd_pairs, index = data_processor.generate_eval_index()
     print('The index of relevant qd_pairs are', n_qd_pairs)
     print('The length of dev_set is ', len(dev_set))
@@ -137,6 +137,7 @@ if __name__ == '__main__':
     parser.add_argument('--lr', dest='lr', type=float, default=0.01, help='initial learning rate')
     parser.add_argument('--clip_grad', dest='clip_grad', type=float, default=5.0, help='clip grad at')
     parser.add_argument('--caseless', dest='caseless', action='store_true', help='caseless or not')
+    parser.add_argument('--fine_tune', dest='fine_tune', action='store_true', help='whether to fine tune the word embedding or not')
 
     # neural model
     parser.add_argument('--deep', action='store_true', help='')
