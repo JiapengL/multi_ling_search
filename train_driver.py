@@ -95,12 +95,14 @@ def run(args):
         sims_dev = model.forward(qs_dev, ds_dev, rels_dev)
 
         precision = eval.precision_at_k(sims_dev, qd_index, rels_index, 5)
-        print(precision)
-        dcg = eval.ndcg_at_k(sims_dev, qd_index, rels_index, 5)
-        print(dcg)
+        print('the precision @ 5 is', np.mean(precision))
+        dcg = eval.dcg_at_k(sims_dev, qd_index, rels_index, 5)
+        print('the dcg is', np.mean(dcg))
+        ndcg = eval.ndcg_at_k(sims_dev, qd_index, rels_index, 5)
+        print('the ndcg is', np.mean(ndcg))
 
         loss_dev = model.cal_loss(sims_dev, rels_dev)
-        #print('The evaluation loss at Epoch ', epoch, 'is ', loss_dev)
+        print('The evaluation loss at Epoch ', epoch, 'is ', loss_dev.data.item())
         #print('The similarity of dev is ', sims_dev)
 
         # todo: decay learning rate
@@ -127,7 +129,7 @@ if __name__ == '__main__':
 
     # training
     parser.add_argument('--use_gpu', dest='use_gpu', action='store_true', help='whether to use gpu')
-    parser.add_argument('--epochs', dest='epochs', type=int, default=4, help='number of epochs to run')
+    parser.add_argument('--epochs', dest='epochs', type=int, default=50, help='number of epochs to run')
     parser.add_argument('--train_batchsize', dest='train_batchsize', type=int, default=32, help='training minibatch size')
     parser.add_argument('--test_batchsize', dest='test_batchsize', type=int, default=32, help='testing minibatch size')
     parser.add_argument('--is_shuffle', dest='is_shuffle', action='store_true', help='whether to shuffle training set each epoch')

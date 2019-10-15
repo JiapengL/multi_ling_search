@@ -117,11 +117,10 @@ def ndcg_at_k(sims, qd_index, rels_index, k):
     rels = []
     for i in range(n_query):
         rels += rels_index[i]
-    dcg_max = []
+    rels = torch.tensor(rels)
+    dcg_max = dcg_at_k(rels, qd_index, rels_index, k)
+    dcg = dcg_at_k(sims, qd_index, rels_index, k)
+    ndcg = []
     for i in range(n_query):
-        dcg_max.append(dcg_at_k(rels_index[i], qd_index))
-#    dcg_max = dcg_at_k(rels)
-#    if not dcg_max:
-#        return 0.
- #   return dcg_at_k(sims, qd_index, rels_index, k) / dcg_max
-    return rels
+        ndcg.append(dcg[i]/dcg_max[i])
+    return ndcg
