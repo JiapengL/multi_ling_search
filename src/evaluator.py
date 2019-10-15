@@ -23,7 +23,7 @@ def precision_at_k(sims, qd_index, rels_index, k):
     for i in range(n_query):
         r = sims[qd_index[i]:qd_index[i+1]]
         rank = torch.sort(r, descending=True).indices
-        result = [rels_index[i][n] == 2 for n in rank[:k]]
+        result = [rels_index[i][n] != 0 for n in rank[:k]]
         precision.append(np.mean(result))
         if len(rels_index[i]) < k:
             raise ValueError('Relevance score length < k')
