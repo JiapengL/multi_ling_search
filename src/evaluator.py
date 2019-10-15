@@ -1,35 +1,33 @@
 """Todo: write the evaluation functions
 """
 import numpy as np
+import torch
 
-
-def precision_at_k(r, k):
+def precision_at_k(sims, qd_index, rels_index, k):
     """Score is precision @ k
-    Relevance is binary (nonzero is relevant).
-    >>> r = [0, 0, 1]
-    >>> precision_at_k(r, 1)
-    0.0
-    >>> precision_at_k(r, 2)
-    0.0
-    >>> precision_at_k(r, 3)
-    0.33333333333333331
-    >>> precision_at_k(r, 4)
-    Traceback (most recent call last):
-        File "<stdin>", line 1, in ?
-    ValueError: Relevance score length < k
+    We only consider relevant as relevance score = 2
     Args:
-        r: Relevance scores (list or numpy) in rank order
-            (first element is the first item)
+        sims: similarity vector from the model
+        qd_index: the index of relevant (query, doc) pair. The following pairs are docs with the given query
+        rels_index: a list with same length of queries. Each element is a list of relevant score of the given query
+
     Returns:
-        Precision @ k
+        Precision @ k vector, each element is for one query
     Raises:
         ValueError: len(r) must be >= k
     """
     assert k >= 1
-    r = np.asarray(r)[:k] != 0
-    if r.size != k:
-        raise ValueError('Relevance score length < k')
-    return np.mean(r)
+    assert len(qd_index) == len(rels_index) + 1
+    n_query = len(rels_index)
+    precision = []
+    for i in range(n_query):
+        r = sims[qd_index[i]:qd_index[i+1]]
+        rank = torch.sort(r, descending=True).indices
+        result = [rels_index[i][n] == 2 for n in rank[:k]]
+        precision.append(np.mean(result))
+        if len(rels_index[i]) < k:
+            raise ValueError('Relevance score length < k')
+    return precision
 
 
 def average_precision(r):
@@ -74,63 +72,38 @@ def mean_average_precision(rs):
 
 
 
-def dcg_at_k(r, k, method=0):
+def dcg_at_k(sims, qd_index, rels_index, k):
     """Score is discounted cumulative gain (dcg)
     Relevance is positive real values.  Can use binary
-    as the previous methods.
-    Example from
-    http://www.stanford.edu/class/cs276/handouts/EvaluationNew-handout-6-per.pdf
-    >>> r = [3, 2, 3, 0, 0, 1, 2, 2, 3, 0]
-    >>> dcg_at_k(r, 1)
-    3.0
-    >>> dcg_at_k(r, 1, method=1)
-    3.0
-    >>> dcg_at_k(r, 2)
-    5.0
-    >>> dcg_at_k(r, 2, method=1)
-    4.2618595071429155
-    >>> dcg_at_k(r, 10)
-    9.6051177391888114
-    >>> dcg_at_k(r, 11)
-    9.6051177391888114
     Args:
-        r: Relevance scores (list or numpy) in rank order
-            (first element is the first item)
-        k: Number of results to consider
-        method: If 0 then weights are [1.0, 1.0, 0.6309, 0.5, 0.4307, ...]
-                If 1 then weights are [1.0, 0.6309, 0.5, 0.4307, ...]
+        sims: similarity vector from the model
+        qd_index: the index of relevant (query, doc) pair. The following pairs are docs with the given query
+        rels_index: a list with same length of queries. Each element is a list of relevant score of the given query
+        n: Number of results to consider
     Returns:
         Discounted cumulative gain
     """
-    r = np.asfarray(r)[:k]
-    if r.size:
-        if method == 0:
-            return r[0] + np.sum(r[1:] / np.log2(np.arange(2, r.size + 1)))
-        elif method == 1:
-            return np.sum(r / np.log2(np.arange(2, r.size + 2)))
-        else:
-            raise ValueError('method must be 0 or 1.')
-    return 0.
+    assert k >= 1
+    assert len(qd_index) == len(rels_index) + 1
+    n_query = len(rels_index)
+    dcg = []
+    for i in range(n_query):
+        r = sims[qd_index[i]:qd_index[i+1]]
+        rank = torch.sort(r, descending=True).indices
+        result = [rels_index[i][n] for n in rank[:k]]
+
+        dcg_value = 0
+        for j in range(k):
+            dcg_value += result[j]/np.log2(j + 2)
+        dcg.append(dcg_value)
+        if len(rels_index[i]) < k:
+            raise ValueError('Relevance score length < k')
+    return dcg
 
 
-def ndcg_at_k(r, k, method=0):
+def ndcg_at_k(sims, qd_index, rels_index, k):
     """Score is normalized discounted cumulative gain (ndcg)
     Relevance is positive real values.  Can use binary
-    as the previous methods.
-    Example from
-    http://www.stanford.edu/class/cs276/handouts/EvaluationNew-handout-6-per.pdf
-    >>> r = [3, 2, 3, 0, 0, 1, 2, 2, 3, 0]
-    >>> ndcg_at_k(r, 1)
-    1.0
-    >>> r = [2, 1, 2, 0]
-    >>> ndcg_at_k(r, 4)
-    0.9203032077642922
-    >>> ndcg_at_k(r, 4, method=1)
-    0.96519546960144276
-    >>> ndcg_at_k([0], 1)
-    0.0
-    >>> ndcg_at_k([1], 2)
-    1.0
     Args:
         r: Relevance scores (list or numpy) in rank order
             (first element is the first item)
@@ -140,7 +113,15 @@ def ndcg_at_k(r, k, method=0):
     Returns:
         Normalized discounted cumulative gain
     """
-    dcg_max = dcg_at_k(sorted(r, reverse=True), k, method)
-    if not dcg_max:
-        return 0.
-    return dcg_at_k(r, k, method) / dcg_max
+    n_query = len(rels_index)
+    rels = []
+    for i in range(n_query):
+        rels += rels_index[i]
+    dcg_max = []
+    for i in range(n_query):
+        dcg_max.append(dcg_at_k(rels_index[i], qd_index))
+#    dcg_max = dcg_at_k(rels)
+#    if not dcg_max:
+#        return 0.
+ #   return dcg_at_k(sims, qd_index, rels_index, k) / dcg_max
+    return rels

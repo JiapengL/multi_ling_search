@@ -45,6 +45,31 @@ class DataProcessor(object):
                     d_vocab[tok] = len(d_vocab)
         return q_vocab, d_vocab
 
+    def load_vocab(self, args):
+        """
+        load language vocabulary from files with given size
+        """
+
+        q_vocab = defaultdict(int)
+        q_vocab["<pad>"] = len(q_vocab)
+        q_vocab["<unk>"] = len(q_vocab)
+
+        d_vocab = defaultdict(int)
+        d_vocab["<pad>"] = len(d_vocab)
+        d_vocab["<unk>"] = len(d_vocab)
+
+        for i, w in enumerate(open(args.q_vocab_path, "r")):
+            if i < args.vocab_size:
+                w = w.lower() if self.caseless else w
+                if w not in q_vocab:
+                    q_vocab[w.strip()] = len(q_vocab)
+        for i, w in enumerate(open(args.d_vocab_path, "r")):
+            if i < args.vocab_size:
+                w = w.lower() if self.caseless else w
+                if w not in d_vocab:
+                    d_vocab[w.strip()] = len(d_vocab)
+        return q_vocab, d_vocab
+
     def _build_data(self, data_path, caseless):
         """Build the token dataset for sentence pairs, each data point is represented by (relevance score, query_text, doc_text)
         """
@@ -103,9 +128,9 @@ class DataProcessor(object):
 
     def generate_eval_index(self):
 
-        n_qd_pairs = []
+        n_qd_pairs = [0]
         index = []
-        count = 0
+        count = -1
 
         data_ls = self.raw_dev
         for i, line in enumerate(data_ls):
@@ -121,4 +146,6 @@ class DataProcessor(object):
 
             else:
                 rels_vector.append(rel)
+        index.append(rels_vector)
+        n_qd_pairs.append(len(data_ls))
         return n_qd_pairs, index

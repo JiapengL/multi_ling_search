@@ -33,17 +33,6 @@ class SimpleDSSM(nn.Module):
         pass
 
 
-    def load_vocab(self, path, size):
-        """
-        load language vocabulary from files with given size
-        """
-        vocab = {}
-        for i, w in enumerate(open(path, "r")):
-            if i < size:
-                vocab[w.strip()] = 1
-        return vocab
-
-
     def load_embeddings(self, args, vocab, _type):
         """
         load query language embedding and doc language embedding as model parameters
