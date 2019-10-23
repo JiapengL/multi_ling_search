@@ -70,7 +70,7 @@ def divide_queries(rel_dict):
     """
 
     #all_queries = set([q_id for q_id, v in rel_dict.items()])
-    all_queries = set([q_id for q_id, v in rel_dict.items()][:10])
+    all_queries = set([q_id for q_id, v in rel_dict.items()][:50000])
     test_q_num = int(len(all_queries)*0.2)
 
     test_queries = set(random.sample(all_queries, k=test_q_num))
@@ -130,9 +130,9 @@ def main():
     random.seed(666)
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--query_path', dest='query_path', type=str, default="/Users/jiapengliu/Document/Project/raw_data/wiki-clir/english/wiki_en.queries")
-    parser.add_argument('--doc_path', dest='doc_path', type=str, default="/Users/jiapengliu/Document/Project/raw_data/wiki-clir/french/wiki_fr.documents")
-    parser.add_argument('--rel_path', dest='rel_path', type=str, default="/Users/jiapengliu/Document/Project/raw_data/wiki-clir/french/en2fr.rel")
+    parser.add_argument('--query_path', dest='query_path', type=str, default="/home/liu1769/scratch/english/wiki_en.queries")
+    parser.add_argument('--doc_path', dest='doc_path', type=str, default="/home/liu1769/scratch/french/wiki_fr.documents")
+    parser.add_argument('--rel_path', dest='rel_path', type=str, default="/home/liu1769/scratch/french/en2fr.rel")
     parser.add_argument('--train_negsample', dest='train_negsample', type=int, default=4)
     parser.add_argument('--test_negsample', dest='test_negsample', type=int, default=10)
 
@@ -142,7 +142,7 @@ def main():
     lang2 = args.doc_path.split('/')[-2]
     print("Start to process queries in English and docs in {}...".format(lang2))
 
-    path_to_save = 'data_'+lang1+'__'+lang2
+    path_to_save = 'data_'+lang1+'__'+lang2+'50000'
     if not os.path.exists(path_to_save):
         os.mkdir(path_to_save)
 

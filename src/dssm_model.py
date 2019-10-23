@@ -21,13 +21,13 @@ class SimpleDSSM(nn.Module):
         self.embed_dim = args.embed_dim
         self.theta = args.theta
         self.args = args
-
+        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         # Internal structures
 
         # embedding of q, the input of embedding should be index tensor
-        self.q_word_embeds = nn.Embedding(q_vocab_size, self.embed_dim)
+        self.q_word_embeds = nn.Embedding(q_vocab_size, self.embed_dim).to(self.device)
         # embedding of d
-        self.d_word_embeds = nn.Embedding(d_vocab_size, self.embed_dim)
+        self.d_word_embeds = nn.Embedding(d_vocab_size, self.embed_dim).to(self.device)
 
     def init_parameters(self):
         pass
@@ -79,14 +79,14 @@ class SimpleDSSM(nn.Module):
 
         if _type == "query":
             if self.args.fine_tune:
-                self.q_word_embeds = nn.Embedding.from_pretrained(temp_tensor, freeze=False)
+                self.q_word_embeds = nn.Embedding.from_pretrained(temp_tensor, freeze=False).to(self.device)
             else:
-                self.q_word_embeds = nn.Embedding.from_pretrained(temp_tensor, freeze=False)
+                self.q_word_embeds = nn.Embedding.from_pretrained(temp_tensor, freeze=False).to(self.device)
         elif _type == "document":
             if self.args.fine_tune:
-                self.q_word_embeds = nn.Embedding.from_pretrained(temp_tensor)
+                self.d_word_embeds = nn.Embedding.from_pretrained(temp_tensor, freeze=False).to(self.device)
             else:
-                self.d_word_embeds = nn.Embedding.from_pretrained(temp_tensor)
+                self.d_word_embeds = nn.Embedding.from_pretrained(temp_tensor, freeze=False).to(self.device)
 
         print("Successfully loaded embeddings.")
 
@@ -113,12 +113,12 @@ class SimpleDSSM(nn.Module):
         qs_input = self.q_word_embeds.forward(qs)
         ds_input = self.d_word_embeds.forward(ds)
 
-        q_rep = torch.mean(qs_input, dim=1)
-        d_rep = torch.mean(ds_input, dim=1)
+        q_rep = torch.tanh(torch.mean(qs_input, dim=1))
+        d_rep = torch.tanh(torch.mean(ds_input, dim=1))
 
         sims = self.cal_sim(q_rep, d_rep)
 
-        return sims
+        return q_rep.shape, d_rep.shape, sims
 
 
     def predict(self, sims):
@@ -130,7 +130,7 @@ class SimpleDSSM(nn.Module):
         return torch.gt(sims, self.theta[1]).int() + torch.gt(sims, self.theta[0]).int()
 
 
-    def threshold(self, rels, index):
+    def __threshold(self, rels, index):
         """
         thresholding function for ordinal regression loss
         return 1 if rels >= index else -1
@@ -147,8 +147,8 @@ class SimpleDSSM(nn.Module):
         :return: average loss
         """
 
-        loss_theta1 = F.relu(self.threshold(rels, 1) * (self.theta[0] - sims))
-        loss_theta2 = F.relu(self.threshold(rels, 2) * (self.theta[1] - sims))
+        loss_theta1 = F.relu(self.__threshold(rels, 1) * (self.theta[0] - sims))
+        loss_theta2 = F.relu(self.__threshold(rels, 2) * (self.theta[1] - sims))
 
         return torch.mean(loss_theta1 + loss_theta2)
 
@@ -156,5 +156,63 @@ class SimpleDSSM(nn.Module):
 
 class DeepDSSM(SimpleDSSM):
 
-    def __init__(self, args):
-        super(DeepDSSM, self).__init__()
+    def __init__(self, args, q_vocab_size, d_vocab_size):
+        super(DeepDSSM, self).__init__(args, q_vocab_size, d_vocab_size)
+
+        # layers for query
+        self.Embedding_size = 64
+        self.WINDOW_SIZE = 3
+        self.TOTAL_LETTER_GRAMS = int(1 * 1e5)
+        self.WORD_DEPTH = self.WINDOW_SIZE * self.Embedding_size
+        self.K = 300
+        self.q_conv = nn.Conv1d(self.WORD_DEPTH, self.K, 1)
+        self.d_conv = nn.Conv1d(self.WORD_DEPTH, self.K, 1)
+        if torch.cuda.device_count() > 1:
+            self.q_conv = nn.DataParallel(self.q_conv)
+            self.d_conv = nn.DataParallel(self.d_conv)
+#        self.sem = nn.Linear(K, L)
+
+
+    def generate_n_gram(self, word_tensor):
+        """
+        calculate the input vector for n_gram, with windows_size = self.WINDOW_SIZE
+        """
+
+        sent_len = word_tensor.shape[1]
+        temp = word_tensor[:, :sent_len - self.WINDOW_SIZE + 1, :]
+
+        for i in range(1, self.WINDOW_SIZE):
+            temp = torch.cat((temp, word_tensor[:, i:(sent_len - self.WINDOW_SIZE + i + 1), :]), dim=2)
+
+        return temp.transpose(1, 2)
+
+
+    def max_pooling(self, x):
+        """
+        maxpooling over the length of sentence dimension
+        """
+
+        return torch.squeeze(x.topk(1, dim=2)[0], dim = 2)
+
+
+
+    def forward(self, qs, ds, rels):
+
+        # qs_input shape: (batch, len_query, embedding_dim)
+        # ds_input shape: (batch, len_doc, embedding_dim)
+
+        qs_input = self.q_word_embeds.forward(qs)
+        ds_input = self.d_word_embeds.forward(ds)
+
+        qs_ngram = self.generate_n_gram(qs_input)
+        ds_ngram = self.generate_n_gram(ds_input)
+
+        qs_conv = torch.tanh(self.q_conv(qs_ngram))
+        ds_conv = torch.tanh(self.d_conv(ds_ngram))
+
+        qs_maxp = self.max_pooling(qs_conv)
+        ds_maxp = self.max_pooling(ds_conv)
+
+        sims = self.cal_sim(qs_maxp, ds_maxp)
+
+        return sims

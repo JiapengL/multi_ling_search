@@ -8,7 +8,7 @@ import math
 
 from tqdm import tqdm
 from nltk.tokenize import sent_tokenize, word_tokenize
-
+import torch
 import pdb
 
 class DataProcessor(object):
@@ -16,9 +16,21 @@ class DataProcessor(object):
     def __init__(self, args):
 
         self.caseless = args.caseless
-        self.raw_train = self._build_data(args.train_file, args.caseless)
-        self.raw_dev = self._build_data(args.dev_file, args.caseless)
-        self.raw_test = self._build_data(args.test_file, args.caseless)
+
+        if args.build_data:
+            print("loading train_data ...")
+            self.raw_train = self._build_data(args.train_file, args.caseless)
+            print("loading dev_data ...")
+            self.raw_dev = self._build_data(args.dev_file, args.caseless)
+            print("loading test_data ...")
+            self.raw_test = self._build_data(args.test_file, args.caseless)
+        else:
+            print("loading train_data ...")
+            self.raw_train = self._load_data(args.train_file)
+            print("loading dev_data ...")
+            self.raw_dev = self._load_data(args.dev_file)
+            print("loading test_data ...")
+            self.raw_test = self._load_data(args.test_file)
 
 
     def build_vocab(self):
@@ -27,11 +39,11 @@ class DataProcessor(object):
 
         q_vocab = defaultdict(int)
         q_vocab["<pad>"] = len(q_vocab)
-        q_vocab["<unk>"] = len(q_vocab)
+        q_vocab["<UNK>"] = len(q_vocab)
 
         d_vocab = defaultdict(int)
         d_vocab["<pad>"] = len(d_vocab)
-        d_vocab["<unk>"] = len(d_vocab)
+        d_vocab["<UNK>"] = len(d_vocab)
 
         for line in self.raw_train:
             _, q_text, d_text = line[0], line[1], line[2]
@@ -51,23 +63,24 @@ class DataProcessor(object):
         """
 
         q_vocab = defaultdict(int)
-        q_vocab["<pad>"] = len(q_vocab)
-        q_vocab["<unk>"] = len(q_vocab)
-
         d_vocab = defaultdict(int)
-        d_vocab["<pad>"] = len(d_vocab)
-        d_vocab["<unk>"] = len(d_vocab)
 
-        for i, w in enumerate(open(args.q_vocab_path, "r")):
+        with open(args.q_vocab_path, "rb") as f_q:
+            voc_q = pickle.load(f_q)
+        for i, w in enumerate(voc_q):
             if i < args.vocab_size:
                 w = w.lower() if self.caseless else w
                 if w not in q_vocab:
                     q_vocab[w.strip()] = len(q_vocab)
-        for i, w in enumerate(open(args.d_vocab_path, "r")):
+
+        with open(args.d_vocab_path, "rb") as f_d:
+            voc_d = pickle.load(f_d)
+        for i, w in enumerate(voc_d):
             if i < args.vocab_size:
                 w = w.lower() if self.caseless else w
                 if w not in d_vocab:
                     d_vocab[w.strip()] = len(d_vocab)
+
         return q_vocab, d_vocab
 
     def _build_data(self, data_path, caseless):
@@ -88,11 +101,22 @@ class DataProcessor(object):
 
         return data_ls
 
+
+    def _load_data(self, data_path):
+        """Build the token dataset for sentence pairs, each data point is represented by (relevance score, query_text, doc_text)
+        """
+
+        with open(data_path, "rb") as f:
+            data_ls = pickle.load(f)
+
+        return data_ls
+
     def generate_train_batch(self, batch_size, is_shuffle=False):
         """Generate the batch of raw training dataset
         """
 
         data_ls = self.raw_train
+
         if is_shuffle:
             random.shuffle(data_ls)
 

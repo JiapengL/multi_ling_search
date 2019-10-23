@@ -38,17 +38,14 @@ pickle.dump(vocab_d, open(path_fr_emb, "wb"))
 
 
 # write vocabulary of eng
-path_en_vocab = '/Users/jiapengliu/Document/Project/raw_data/vocab_en.txt'
-with open(path_en_vocab, 'w') as f:
-    for word in vocab_qu[0]:
-        f.write(word+'\n')
+path_en_vocab = '/Users/jiapengliu/Document/Project/raw_data/vocab_en.pkl'
+pickle.dump(vocab_qu[0], open(path_en_vocab, "wb"))
 
 
 # write vocabulary of fr
-path_fr_vocab = '/Users/jiapengliu/Document/Project/raw_data/vocab_fr.txt'
-with open(path_fr_vocab, 'w') as f:
-    for word in vocab_doc[0]:
-        f.write(word+'\n')
+path_fr_vocab = '/Users/jiapengliu/Document/Project/raw_data/vocab_fr.pkl'
+pickle.dump(vocab_doc[0], open(path_fr_vocab, "wb"))
+
 
 np.piecewise(sims, [x < 0, x >= 0], [lambda x: -x, lambda x: x])
 

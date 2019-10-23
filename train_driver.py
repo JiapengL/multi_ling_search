@@ -5,6 +5,7 @@ import numpy as np
 import argparse
 from datetime import datetime
 import pickle, json
+import time
 
 HOME = os.getenv("HOME")
 
@@ -20,14 +21,19 @@ import pdb
 
 
 def run(args):
-    random.seed(666)
-    np.random.seed(666)
-    torch.cuda.manual_seed(666)
-    torch.manual_seed(666)
+    random.seed(123)
+    np.random.seed(123)
+    torch.cuda.manual_seed(123)
+    torch.manual_seed(123)
+
+    time1 = time.time()
+    #use gpu is args.use_gpu is True
+    if args.use_gpu:
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        print("device is:", device)
 
     # data setup
     data_processor = DataProcessor(args)
-
 
     # load vocabulary
     if args.create_vocabulary:
@@ -38,6 +44,8 @@ def run(args):
     print('The length of query vocabulary is ', len(vocab_q))
     print('The length of doc vocabulary is ', len(vocab_d))
     #vocab_q, vocab_d = data_processor.build_vocab()
+    time2 = time.time()
+    print('Loading running time is:', time2 - time1)
 
     # model setup
     if args.deep:
@@ -45,6 +53,10 @@ def run(args):
     else:
         model = SimpleDSSM(args, len(vocab_q), len(vocab_d))
 
+
+    if args.use_gpu:
+        model.to(device)
+        print(model)
 
     # load embedding
     if args.q_extn_embedding:
@@ -57,7 +69,6 @@ def run(args):
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     """
-
     n_qd_pairs, index = data_processor.generate_eval_index()
     print('The index of relevant qd_pairs are', n_qd_pairs)
     print('The length of dev_set is ', len(dev_set))
@@ -65,35 +76,53 @@ def run(args):
     #print('The length of docs for the first query is ', index[10:15])
     print(dev_set[0])
     """
+
+    # load dev data
+    dev_set = data_processor.raw_dev
+    qd_index, rels_index = data_processor.generate_eval_index()
+    rels_dev, qs_dev, ds_dev = numerize(dev_set, vocab_q, vocab_d)
+    if args.use_gpu:
+        rels_dev, qs_dev, ds_dev = rels_dev.to(device), qs_dev.to(device), ds_dev.to(device)
+
+    #training and evaluating
     for epoch in range(1, 1+args.epochs):
+
         model.train()
         loss_total = []
+        i = 0
         for batch in data_processor.generate_train_batch(args.train_batchsize, args.is_shuffle):
-
             rels, qs, ds = numerize(batch, vocab_q, vocab_d)
-            sims = model.forward(qs, ds, rels)
 
+            if args.use_gpu:
+                rels, qs, ds = rels.to(device), qs.to(device), ds.to(device)
+#            print(batch[1], len(batch[1][1]))
+#            print(qs[1], qs.shape)
+#            qs_input, ds_input = model.forward(qs, ds, rels)
+#            print(qs_input, ds_input)
+            sims = model.forward(qs, ds, rels)
             model.zero_grad()
 
+            if i%10000 == 0:
+                print(i)
+
+            i += 1
             loss = model.cal_loss(sims, rels)
             loss.backward()
 
-            nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
+            #nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
             optimizer.step()
             loss_total.append(loss.data)
-
             # pdb.set_trace()
-        print('The training loss at Epoch ', epoch, 'is ', np.mean(loss_total))
+        #print('The first 100 training loss', loss_total[:20])
+        print('The last 100 train loss', loss_total[-20:])
+        print('The training loss at Epoch ', epoch, 'is ', torch.mean(torch.stack(loss_total)).item())
+        print('is nan:', torch.sum(torch.isnan(torch.stack(loss_total))))
+
 
         # evaluation on dev set
         model.eval()
 
-        dev_set = data_processor.raw_dev
-        qd_index, rels_index = data_processor.generate_eval_index()
-
-        rels_dev, qs_dev, ds_dev = numerize(dev_set, vocab_q, vocab_d)
         sims_dev = model.forward(qs_dev, ds_dev, rels_dev)
-
         precision = eval.precision_at_k(sims_dev, qd_index, rels_index, 5)
         print('the precision @ 5 is', np.mean(precision))
         dcg = eval.dcg_at_k(sims_dev, qd_index, rels_index, 5)
@@ -115,21 +144,39 @@ if __name__ == '__main__':
     parser=argparse.ArgumentParser()
 
     # data
-    parser.add_argument('--train_file', dest='train_file', type=str, default='toy_eng_data/train.csv', help='path to training file')
-    parser.add_argument('--dev_file', dest='dev_file', type=str, default='toy_eng_data/dev.csv', help='path to development file')
-    parser.add_argument('--test_file', dest='test_file', type=str, default='toy_eng_data/test.csv', help='path to test file')
 
+    parser.add_argument('--build_data', dest='build_data', action='store_true', help='if True, build data list from csv file')
+
+    parser.add_argument('--train_file', dest='train_file', type=str, default='/home/liu1769/scratch/data_eng__french50000/train.pkl', help='path to training file')
+    parser.add_argument('--dev_file', dest='dev_file', type=str, default='/home/liu1769/scratch/data_eng__french50000/dev_small.pkl', help='path to development file')
+    parser.add_argument('--test_file', dest='test_file', type=str, default='/home/liu1769/scratch/data_eng__french50000/test.pkl', help='path to test file')
+
+    """
+    parser.add_argument('--train_file', dest='train_file', type=str, default='/Users/jiapengliu/Document/Project/multi_ling_search/toy_eng_data/train.csv', help='path to training file')
+    parser.add_argument('--dev_file', dest='dev_file', type=str, default='/Users/jiapengliu/Document/Project/multi_ling_search/toy_eng_data/dev.csv', help='path to development file')
+    parser.add_argument('--test_file', dest='test_file', type=str, default='/Users/jiapengliu/Document/Project/multi_ling_search/toy_eng_data/test.csv', help='path to test file')
+    """
     # embeddings
+
     parser.add_argument('--create_vocabulary', action='store_true', help='')
-    parser.add_argument('--q_vocab_path', dest='q_vocab_path', type=str, default='/Users/jiapengliu/Document/Project/multi_ling_search/word_embed/vocab_en.txt', help='path to vocabulary for queries')
-    parser.add_argument('--d_vocab_path', dest='d_vocab_path', type=str, default='/Users/jiapengliu/Document/Project/multi_ling_search/word_embed/vocab_fr.txt', help='path to vocabulary embedding for documents')
     parser.add_argument('--vocab_size', dest='vocab_size', type=int, default='100000', help='size of vocabulary')
-    parser.add_argument('--q_extn_embedding', dest='q_extn_embedding', type=str, default='', help='path to pre-trained embedding for queries')
-    parser.add_argument('--d_extn_embedding', dest='d_extn_embedding', type=str, default='', help='path to pre-trained embedding for documents')
+
+    """
+    parser.add_argument('--q_vocab_path', dest='q_vocab_path', type=str, default='/Users/jiapengliu/Document/Project/multi_ling_search/word_embed/vocab_en.pkl', help='path to vocabulary for queries')
+    parser.add_argument('--d_vocab_path', dest='d_vocab_path', type=str, default='/Users/jiapengliu/Document/Project/multi_ling_search/word_embed/vocab_fr.pkl', help='path to vocabulary embedding for documents')
+    parser.add_argument('--q_extn_embedding', dest='q_extn_embedding', type=str, default='/Users/jiapengliu/Document/Project/multi_ling_search/word_embed/polyglot_en_dict.pkl', help='path to pre-trained embedding for queries')
+    parser.add_argument('--d_extn_embedding', dest='d_extn_embedding', type=str, default='/Users/jiapengliu/Document/Project/multi_ling_search/word_embed/polyglot_fr_dict.pkl', help='path to pre-trained embedding for documents')
+
+    """
+    parser.add_argument('--q_vocab_path', dest='q_vocab_path', type=str, default='/home/liu1769/multi_ling_search/word_embed/vocab_en.pkl', help='path to vocabulary for queries')
+    parser.add_argument('--d_vocab_path', dest='d_vocab_path', type=str, default='/home/liu1769/multi_ling_search/word_embed/vocab_fr.pkl', help='path to vocabulary embedding for documents')
+    parser.add_argument('--q_extn_embedding', dest='q_extn_embedding', type=str, default='/home/liu1769/multi_ling_search/word_embed/polyglot_en_dict.pkl', help='path to pre-trained embedding for queries')
+    parser.add_argument('--d_extn_embedding', dest='d_extn_embedding', type=str, default='/home/liu1769/multi_ling_search/word_embed/polyglot_fr_dict.pkl', help='path to pre-trained embedding for documents')
+
 
     # training
     parser.add_argument('--use_gpu', dest='use_gpu', action='store_true', help='whether to use gpu')
-    parser.add_argument('--epochs', dest='epochs', type=int, default=50, help='number of epochs to run')
+    parser.add_argument('--epochs', dest='epochs', type=int, default=10, help='number of epochs to run')
     parser.add_argument('--train_batchsize', dest='train_batchsize', type=int, default=32, help='training minibatch size')
     parser.add_argument('--test_batchsize', dest='test_batchsize', type=int, default=32, help='testing minibatch size')
     parser.add_argument('--is_shuffle', dest='is_shuffle', action='store_true', help='whether to shuffle training set each epoch')

@@ -7,21 +7,21 @@ import torch
 def pad_convert(sent, vocab, max_l, pad_type="back"):
     """
     padding embeddings for non-equal length of sentences
-
     """
-    num_st = [vocab[t] if t in vocab else vocab["<unk>"] for t in sent]
+
+    num_st = [vocab[t] if t in vocab else vocab["<UNK>"] for t in sent]
 
     if pad_type=="front":
-        num_st = [vocab["pad"]]*(max_l-len(sent)) + num_st
+        num_st = [vocab["<PAD>"]]*(max_l-len(sent)) + num_st
     elif pad_type=="both":
         if (max_l-len(sent))%2 == 0:
             pad_l = (max_l-len(sent))/2
-            num_st = [vocab["pad"]]*pad_l + num_st + [vocab["pad"]]*pad_l
+            num_st = [vocab["<PAD>"]]*pad_l + num_st + [vocab["<PAD>"]]*pad_l
         else:
             pad_l, pad_r = (max_l-len(sent))/2, (max_l-len(sent))/2+1
-            num_st = [vocab["pad"]]*pad_l + num_st + [vocab["pad"]]*pad_r
+            num_st = [vocab["<PAD>"]]*pad_l + num_st + [vocab["<PAD>"]]*pad_r
     else:
-        num_st = num_st + [vocab["pad"]]*(max_l-len(sent))
+        num_st = num_st + [vocab["<PAD>"]]*(max_l-len(sent))
 
     return num_st
 
@@ -40,5 +40,7 @@ def numerize(batch, q_vocab, d_vocab, pad_type="back"):
 
     batch_max_d_len = max(map(lambda st: len(st), [pair[2] for pair in batch]))
     d_x = [pad_convert(pair[2], d_vocab, batch_max_d_len, pad_type) for pair in batch]
+
+ #   if windom_size != 1:
 
     return torch.tensor(labels).long(), torch.tensor(q_x).long(), torch.tensor(d_x).long()
