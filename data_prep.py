@@ -4,9 +4,10 @@ from collections import defaultdict
 import argparse
 import copy
 import os
+import pickle
+from nltk.tokenize import word_tokenize
 
 from tqdm import tqdm
-
 import pdb
 
 
@@ -41,9 +42,10 @@ def create_query_text_dict(query_path):
 
     query_dict = dict()
 
-    with open(query_path, 'r') as qf:
+    with open(query_path, 'r', encoding="utf-8") as qf:
         for line in qf.readlines():
             q_id, word, query = line.strip('\n').split('\t')
+
             query_dict[int(q_id)] = (word, query)
 
     return query_dict
@@ -55,7 +57,7 @@ def create_doc_text_dict(doc_path):
 
     doc_dict = dict()
 
-    with open(doc_path, 'r') as df:
+    with open(doc_path, 'r', encoding="utf-8") as df:
         for line in df.readlines():
             d_id, word, doc = line.strip('\n').split('\t')
 
@@ -69,8 +71,9 @@ def divide_queries(rel_dict):
     """Create training queries, dev queries and test queries, from the whole query set.
     """
 
-    #all_queries = set([q_id for q_id, v in rel_dict.items()])
-    all_queries = set([q_id for q_id, v in rel_dict.items()][:50000])
+    # all_queries = set([q_id for q_id, v in rel_dict.items()])
+    all_queries = set([q_id for q_id, v in rel_dict.items()][:100000])
+
     test_q_num = int(len(all_queries)*0.2)
 
     test_queries = set(random.sample(all_queries, k=test_q_num))
@@ -93,7 +96,8 @@ def sample_neg(query_set, rel_dict, d_dict, k):
         # pdb.set_trace()
 
         non_neg_docs = set(rel_dict[q_id]['rel']+rel_dict[q_id]['srel'])
-        to_sample_num = len(non_neg_docs) * k
+        # to_sample_num = len(non_neg_docs) * k
+        to_sample_num = k
 
         while True:
             sampled_d = set(random.sample(all_docs, to_sample_num))
@@ -109,7 +113,7 @@ def create_dataset(query_set, rel_dict, query_dict, doc_dict, _path):
     For the relevance score, use 2 represents relevant, 1 to be slightly relevant and 0 be not relevant.
     """
 
-    with open(_path, 'w') as f:
+    with open(_path, 'w', encoding="utf-8") as f:
 
         for q_id in tqdm(query_set):
 
@@ -125,6 +129,10 @@ def create_dataset(query_set, rel_dict, query_dict, doc_dict, _path):
             for d_id in rel_dict[q_id]['nrel']:
                 f.write('0\t'+query_text+'\t'+doc_dict[d_id][1]+'\n')
 
+
+
+
+
 def main():
 
     random.seed(666)
@@ -133,8 +141,8 @@ def main():
     parser.add_argument('--query_path', dest='query_path', type=str, default="/home/liu1769/scratch/english/wiki_en.queries")
     parser.add_argument('--doc_path', dest='doc_path', type=str, default="/home/liu1769/scratch/french/wiki_fr.documents")
     parser.add_argument('--rel_path', dest='rel_path', type=str, default="/home/liu1769/scratch/french/en2fr.rel")
-    parser.add_argument('--train_negsample', dest='train_negsample', type=int, default=4)
-    parser.add_argument('--test_negsample', dest='test_negsample', type=int, default=10)
+    parser.add_argument('--train_negsample', dest='train_negsample', type=int, default=40)
+    parser.add_argument('--test_negsample', dest='test_negsample', type=int, default=40)
 
     args = parser.parse_args()
 
@@ -142,7 +150,7 @@ def main():
     lang2 = args.doc_path.split('/')[-2]
     print("Start to process queries in English and docs in {}...".format(lang2))
 
-    path_to_save = 'data_'+lang1+'__'+lang2+'50000'
+    path_to_save = 'data_'+lang1+'__'+lang2
     if not os.path.exists(path_to_save):
         os.mkdir(path_to_save)
 

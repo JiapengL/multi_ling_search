@@ -11,6 +11,7 @@ import pickle
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import pdb
 
 
 class SimpleDSSM(nn.Module):
@@ -19,15 +20,17 @@ class SimpleDSSM(nn.Module):
 
         self.n_hdim = args.n_hdim
         self.embed_dim = args.embed_dim
-        self.theta = args.theta
+        self.theta = args.theta if not args.use_sps else args.sps_theta
         self.args = args
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        # Internal structures
 
         # embedding of q, the input of embedding should be index tensor
         self.q_word_embeds = nn.Embedding(q_vocab_size, self.embed_dim).to(self.device)
         # embedding of d
         self.d_word_embeds = nn.Embedding(d_vocab_size, self.embed_dim).to(self.device)
+        self.out_dim = 32
+        self.q_fc = nn.Linear(self.embed_dim, self.out_dim)
+        self.d_fc = nn.Linear(self.embed_dim, self.out_dim)
 
     def init_parameters(self):
         pass
@@ -79,12 +82,12 @@ class SimpleDSSM(nn.Module):
 
         if _type == "query":
             if self.args.fine_tune:
-                self.q_word_embeds = nn.Embedding.from_pretrained(temp_tensor, freeze=False).to(self.device)
+                self.q_word_embeds = nn.Embedding.from_pretrained(temp_tensor).to(self.device)
             else:
                 self.q_word_embeds = nn.Embedding.from_pretrained(temp_tensor, freeze=False).to(self.device)
         elif _type == "document":
             if self.args.fine_tune:
-                self.d_word_embeds = nn.Embedding.from_pretrained(temp_tensor, freeze=False).to(self.device)
+                self.d_word_embeds = nn.Embedding.from_pretrained(temp_tensor).to(self.device)
             else:
                 self.d_word_embeds = nn.Embedding.from_pretrained(temp_tensor, freeze=False).to(self.device)
 
@@ -107,18 +110,41 @@ class SimpleDSSM(nn.Module):
         return ret
 
 
+    def get_normalized_vector(self, d):
+        # d needs to be a unit vector at each iteration
 
-    def forward(self, qs, ds, rels):
+        d_norm = F.normalize(d.view(d.size(0), -1), dim=1, p=2).view(d.size())
+        return d_norm
 
-        qs_input = self.q_word_embeds.forward(qs)
-        ds_input = self.d_word_embeds.forward(ds)
 
-        q_rep = torch.tanh(torch.mean(qs_input, dim=1))
-        d_rep = torch.tanh(torch.mean(ds_input, dim=1))
+    def forward(self, qs, ds, q_perturb=None, d_perturb=None):
+
+        qs_emb = self.q_word_embeds.forward(qs)
+        ds_emb = self.d_word_embeds.forward(ds)
+
+        # qs_emb = self.get_normalized_vector(qs_emb)
+        # ds_emb = self.get_normalized_vector(ds_emb)
+
+        self.qs_emb = qs_emb
+        self.ds_emb = ds_emb
+
+        adv_flag = self.training and self.args.vat
+
+        if adv_flag and q_perturb is not None and d_perturb is not None:
+            qs_emb += q_perturb
+            ds_emb += d_perturb
+
+        q_rep = torch.tanh(torch.mean(qs_emb, dim=1))
+        d_rep = torch.tanh(torch.mean(ds_emb, dim=1))
+
+        # q_rep = torch.mean(qs_emb, dim=1)
+        # d_rep = torch.mean(ds_emb, dim=1)
+       # q_o = self.q_fc(q_rep)
+       # d_o = self.q_fc(d_rep)
 
         sims = self.cal_sim(q_rep, d_rep)
 
-        return q_rep.shape, d_rep.shape, sims
+        return sims
 
 
     def predict(self, sims):
@@ -146,11 +172,20 @@ class SimpleDSSM(nn.Module):
         :param rels: relevance score: 0, 1, 2
         :return: average loss
         """
+        if not self.args.use_sps:
+            # if using ordinal regression loss
+            loss_theta1 = F.relu(self.__threshold(rels, 1) * (self.theta[0] - sims)).pow(self.args.m)
+            loss_theta2 = F.relu(self.__threshold(rels, 2) * (self.theta[1] - sims)).pow(self.args.m)
 
-        loss_theta1 = F.relu(self.__threshold(rels, 1) * (self.theta[0] - sims))
-        loss_theta2 = F.relu(self.__threshold(rels, 2) * (self.theta[1] - sims))
+            return torch.mean(loss_theta1 + loss_theta2)
 
-        return torch.mean(loss_theta1 + loss_theta2)
+        else:
+            # if using Semantic product search paper loss
+            loss_type0 = F.relu((rels == 0).float() * (sims - self.theta[0])).pow(self.args.m)
+            loss_type1 = F.relu((rels == 1).float() * (sims - self.theta[1])).pow(self.args.m)
+            loss_type2 = F.relu((rels == 2).float() * (self.theta[2] - sims)).pow(self.args.m)
+
+            return torch.mean(loss_type0 + loss_type1 + loss_type2)
 
 
 
@@ -160,17 +195,23 @@ class DeepDSSM(SimpleDSSM):
         super(DeepDSSM, self).__init__(args, q_vocab_size, d_vocab_size)
 
         # layers for query
-        self.Embedding_size = 64
-        self.WINDOW_SIZE = 3
+        self.WINDOW_SIZE = 1
         self.TOTAL_LETTER_GRAMS = int(1 * 1e5)
-        self.WORD_DEPTH = self.WINDOW_SIZE * self.Embedding_size
-        self.K = 300
+        self.WORD_DEPTH = self.WINDOW_SIZE * self.embed_dim
+        self.K = 16   # size of filter
+        self.L = 32    # size of output
+        self.drop_out = nn.Dropout(p=0.5)
         self.q_conv = nn.Conv1d(self.WORD_DEPTH, self.K, 1)
-        self.d_conv = nn.Conv1d(self.WORD_DEPTH, self.K, 1)
+        #self.d_conv = nn.Conv1d(self.WORD_DEPTH, self.K, 1)
+
         if torch.cuda.device_count() > 1:
             self.q_conv = nn.DataParallel(self.q_conv)
-            self.d_conv = nn.DataParallel(self.d_conv)
-#        self.sem = nn.Linear(K, L)
+         #   self.d_conv = nn.DataParallel(self.d_conv)
+
+        self.q_fc = nn.Linear(self.K, self.L)
+        #self.d_fc = nn.Linear(self.K, self.L)
+
+        self.dropout = nn.Dropout(p=0.5)
 
 
     def generate_n_gram(self, word_tensor):
@@ -192,27 +233,82 @@ class DeepDSSM(SimpleDSSM):
         maxpooling over the length of sentence dimension
         """
 
-        return torch.squeeze(x.topk(1, dim=2)[0], dim = 2)
+        return torch.squeeze(x.topk(1, dim=2)[0], dim=2)
 
 
 
-    def forward(self, qs, ds, rels):
+    def forward(self, qs, ds):
 
         # qs_input shape: (batch, len_query, embedding_dim)
         # ds_input shape: (batch, len_doc, embedding_dim)
 
-        qs_input = self.q_word_embeds.forward(qs)
-        ds_input = self.d_word_embeds.forward(ds)
+        qs_emb = self.q_word_embeds.forward(qs)
+        ds_emb = self.q_word_embeds.forward(ds)
 
-        qs_ngram = self.generate_n_gram(qs_input)
-        ds_ngram = self.generate_n_gram(ds_input)
+        if self.args.dropout:
+            qs_emb = self.dropout(qs_emb)
+            ds_emb = self.dropout(ds_emb)
+
+        qs_ngram = self.generate_n_gram(qs_emb)
+        ds_ngram = self.generate_n_gram(ds_emb)
 
         qs_conv = torch.tanh(self.q_conv(qs_ngram))
-        ds_conv = torch.tanh(self.d_conv(ds_ngram))
+        ds_conv = torch.tanh(self.q_conv(ds_ngram))
 
-        qs_maxp = self.max_pooling(qs_conv)
-        ds_maxp = self.max_pooling(ds_conv)
+        #qs_maxp = self.max_pooling(qs_conv)
+        #ds_maxp = self.max_pooling(ds_conv)
+        qs_maxp = torch.mean(qs_conv, dim=2)
+        ds_maxp = torch.mean(ds_conv, dim=2)
 
-        sims = self.cal_sim(qs_maxp, ds_maxp)
+        qs_drop = self.drop_out(qs_maxp)
+        ds_drop = self.drop_out(ds_maxp)
+
+        qs_sem = self.q_fc(qs_drop)
+        ds_sem = self.q_fc(ds_drop)
+        # pdb.set_trace()
+        sims = self.cal_sim(qs_sem, ds_sem)
+
+        return sims
+
+
+
+
+
+
+
+
+
+class LSTM(SimpleDSSM):
+
+    def __init__(self, args, q_vocab_size, d_vocab_size):
+        super(LSTM, self).__init__(args, q_vocab_size, d_vocab_size)
+
+        # layers for query
+        self.hidden_size = 256
+        self.bilstm = nn.LSTM(self.embed_dim, self.hidden_size,
+                              batch_first=True)
+
+
+        self.out_size = 64
+        self.lin = nn.Linear(self.hidden_size, self.out_size)
+
+
+    def forward(self, qs, ds):
+
+        qs_input = self.q_word_embeds.forward(qs)
+        ds_input = self.q_word_embeds.forward(ds)
+        # size = [batch, len, embed_size]
+        self.bilstm.flatten_parameters()
+
+        qs_out, _ = self.bilstm(qs_input)
+        ds_out, _ = self.bilstm(ds_input)
+
+        qs_lin = qs_out.transpose(0, 1)[-1]
+        ds_lin = ds_out.transpose(0, 1)[-1]
+
+        qs_sem = self.lin(qs_lin)
+        ds_sem = self.lin(ds_lin)
+        # rnn_out:[B, L, hidden_size*2]
+        sims = self.cal_sim(qs_sem, ds_sem)
 
         return sims

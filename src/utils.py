@@ -35,12 +35,13 @@ def numerize(batch, q_vocab, d_vocab, pad_type="back"):
     labels = [int(pair[0]) for pair in batch]
 
     batch_max_q_len = max(map(lambda st: len(st), [pair[1] for pair in batch]))
+    #batch_max_q_len = max(batch_max_q_len, max_len)
+
     q_x = [pad_convert(pair[1], q_vocab, batch_max_q_len, pad_type) for pair in batch]
 
-
     batch_max_d_len = max(map(lambda st: len(st), [pair[2] for pair in batch]))
+    #batch_max_d_len = max(batch_max_d_len, max_len)
     d_x = [pad_convert(pair[2], d_vocab, batch_max_d_len, pad_type) for pair in batch]
 
- #   if windom_size != 1:
 
     return torch.tensor(labels).long(), torch.tensor(q_x).long(), torch.tensor(d_x).long()

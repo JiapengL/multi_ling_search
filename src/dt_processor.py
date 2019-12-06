@@ -22,15 +22,21 @@ class DataProcessor(object):
             self.raw_train = self._build_data(args.train_file, args.caseless)
             print("loading dev_data ...")
             self.raw_dev = self._build_data(args.dev_file, args.caseless)
-            print("loading test_data ...")
-            self.raw_test = self._build_data(args.test_file, args.caseless)
+            #print("loading test_data ...")
+            #self.raw_test = self._build_data(args.test_file, args.caseless)
+            if args.vat:
+                print("loading unlabelled train_data ...")
+                self.raw_train_ul = self._build_data(args.train_ul_file, args.caseless)
         else:
             print("loading train_data ...")
             self.raw_train = self._load_data(args.train_file)
             print("loading dev_data ...")
             self.raw_dev = self._load_data(args.dev_file)
-            print("loading test_data ...")
-            self.raw_test = self._load_data(args.test_file)
+            #print("loading test_data ...")
+            #self.raw_test = self._load_data(args.test_file)
+            if args.vat:
+                print("loading unlabelled train_data ...")
+                self.raw_train_ul = self._load_data(args.train_ul_file)
 
 
     def build_vocab(self):
@@ -56,6 +62,7 @@ class DataProcessor(object):
                 if tok not in d_vocab:
                     d_vocab[tok] = len(d_vocab)
         return q_vocab, d_vocab
+
 
     def load_vocab(self, args):
         """

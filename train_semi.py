@@ -7,6 +7,7 @@ from datetime import datetime
 import pickle, json
 import time
 import h5py
+
 HOME = os.getenv("HOME")
 
 import torch
@@ -17,21 +18,24 @@ from src.dssm_model import SimpleDSSM, DeepDSSM, LSTM
 from src.adversarial import Adv_Simple, Adv_Deep
 from src.dt_processor import DataProcessor
 from src.utils import numerize
+from src.vat_semi import VAT_Simple
 import src.evaluator as eval
+
 import pdb
 from GPUtil import showUtilization as gpu_usage
+from operator import itemgetter
+
+
 
 def run(args):
-    random.seed(123)
-    np.random.seed(123)
-    torch.cuda.manual_seed(123)
-    torch.manual_seed(123)
-
+    random.seed(666)
+    np.random.seed(666)
+    torch.cuda.manual_seed(666)
+    torch.manual_seed(666)
 
     print('The theta is ', args.theta)
     print('The m is ', args.m)
     print('whether use adv is ', args.use_adv)
-
 
     time1 = time.time()
     # use gpu is args.use_gpu is True
@@ -41,7 +45,6 @@ def run(args):
 
     # data setup
     data_processor = DataProcessor(args)
-
     # load vocabulary
     if args.create_vocabulary:
         vocab_q, vocab_d = data_processor.build_vocab()
@@ -54,21 +57,16 @@ def run(args):
     time2 = time.time()
     print('Loading running time is:', time2 - time1)
 
-
     # model setup
-    if args.lstm:
-        model = LSTM(args, len(vocab_q), len(vocab_d))
-    else:
-        if args.use_adv:
-            if args.deep:
-                model = Adv_Deep(args, len(vocab_q), len(vocab_d))
-            else:
-                model = Adv_Simple(args, len(vocab_q), len(vocab_d))
-
-        elif args.deep:
-            model = DeepDSSM(args, len(vocab_q), len(vocab_d))
+    if args.use_adv:
+        if args.deep:
+            model = Adv_Deep(args, len(vocab_q), len(vocab_d))
         else:
-            model = SimpleDSSM(args, len(vocab_q), len(vocab_d))
+            model = Adv_Simple(args, len(vocab_q), len(vocab_d))
+    elif args.deep:
+        model = DeepDSSM(args, len(vocab_q), len(vocab_d))
+    else:
+        model = SimpleDSSM(args, len(vocab_q), len(vocab_d))
 
     # whether use gpu
     if args.use_gpu:
@@ -77,45 +75,63 @@ def run(args):
     else:
         print(model)
 
+    if args.vat:
+        reg_fn = VAT_Simple(model, args, len(vocab_q), len(vocab_d))
+
     # load embedding
     if args.q_extn_embedding:
         model.load_embeddings(args, vocab_q, "query")
-
     if args.d_extn_embedding:
         model.load_embeddings(args, vocab_d, "document")
 
     # optimizer setup
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, betas=(0.5, 0.999))
+    scheduler = torch.optim.lr_scheduler.StepLR(
+        optimizer, step_size=5, gamma=0.9)
 
     # generate dev index
     qd_index, rels_index = data_processor.generate_eval_index()
 
+    cross_loss = nn.CrossEntropyLoss()
+
     # training and evaluating
-    for epoch in range(1, 1+args.epochs):
+    for epoch in range(1, 1 + args.epochs):
 
         model.train()
         loss_total = []
-
-        i = 0
+        loss_pure = []
+        i = 0   # training iterations
         for batch in data_processor.generate_train_batch(args.train_batchsize, args.is_shuffle):
+            #  numerize labeled data
             rels, qs, ds = numerize(batch, vocab_q, vocab_d)
-
             if args.use_gpu:
                 rels, qs, ds = rels.to(device), qs.to(device), ds.to(device)
 
-            sims = model(qs, ds)
             model.zero_grad()
+            sims_l = model(qs, ds)
+            loss = model.cal_loss(sims_l, rels)
 
-            loss = model.cal_loss(sims, rels)
+            if args.vat:
+                # sample and numerize unlabeled data
 
-            if args.use_adv:
-                loss.backward(retain_graph=True)
-                q_grads = torch.autograd.grad(loss, model.qs_emb, retain_graph=True)[0]
-                d_grads = torch.autograd.grad(loss, model.ds_emb, retain_graph=True)[0]
+                batch_indices_ul = torch.LongTensor(
+                    np.random.choice(len(data_processor.raw_train_ul), args.train_batchsize, replace=False))
+                batch_ul = itemgetter(*batch_indices_ul)(data_processor.raw_train_ul)
+                _, qs_ul, ds_ul = numerize(batch_ul, vocab_q, vocab_d)
 
-                sims = model(qs, ds, rels, q_grads, d_grads)
-                loss_adv = model.cal_loss(sims, rels)
-                loss += 0.5*loss_adv
+                if args.use_gpu:
+                    qs_ul, ds_ul = qs_ul.to(device), ds_ul.to(device)
+
+                sims_ul = model(qs_ul, ds_ul)
+                vat_loss = reg_fn(qs_ul, ds_ul, sims_ul)
+                loss += 0.1*vat_loss
+                loss_pure.append(vat_loss.item())
+
+                """
+                # sims_ul = model(qs, ds)
+                vat_loss = reg_fn(qs, ds, sims_l)
+                loss += 0.5*vat_loss
+                """
 
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
@@ -129,6 +145,8 @@ def run(args):
             i += 1
 
         print('The training loss at Epoch ', epoch, 'is ', np.mean(loss_total))
+        if args.vat:
+            print('The Pure training loss at Epoch ', epoch, 'is ', np.mean(loss_pure))
 
         # evaluation on dev set
         model.eval()
@@ -140,32 +158,37 @@ def run(args):
             if args.use_gpu:
                 rels_dev, qs_dev, ds_dev = rels_dev.to(device), qs_dev.to(device), ds_dev.to(device)
 
-
             sims = model(qs_dev, ds_dev)
             sims_dev = torch.cat([sims_dev, sims.data])
 
             loss = model.cal_loss(sims, rels_dev)
             loss_dev.append(loss.item())
 
-        #evaluation
+        # evaluation
+
         print('The evaluation loss at Epoch ', epoch, 'is ', np.mean(loss_dev))
-        print('The accuracy of total, 2, 1, 0 are ', acc)
         precision = eval.precision_at_k(sims_dev, qd_index, rels_index, 5)
         # dcg = eval.dcg_at_k(sims_dev, qd_index, rels_index, 5)
         ndcg = eval.ndcg_at_k(sims_dev, qd_index, rels_index, 5)
-
-
-        prediction = eval.predict(sims_dev, args.theta)
-        acc = eval.accuracy(prediction, rels_index)
-
-
         print('the precision @ 5 is', np.mean(precision))
         # print('the dcg is', np.mean(dcg))
         print('the ndcg @ 5 is', np.mean(ndcg))
+
+        # prediction matrix
+
+        prediction = eval.predict(sims_dev, args.theta)
+        pre_dict = eval.prediction_matrix(prediction, rels_index)
+        print('The prediction matrix is following, rows are rels and columns are prediction:')
+        print(pre_dict)
+
         # todo: decay learning rate
 
-    # todo: evaluate on the final test set
+        """
+        if epoch > 10:
+            scheduler.step()
+        """
 
+    # todo: evaluate on the final test set
 
 
 if __name__ == '__main__':
@@ -270,6 +293,5 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     run(args)
-
 
 
