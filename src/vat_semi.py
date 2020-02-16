@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from src.dssm_model import SimpleDSSM, DeepDSSM
-
+import pdb
 # NOTE hyper-parameters we use in VAT
 # n_power: a number of power iteration for approximation of r_vadv
 # XI: a small float for the approx. of the finite difference method
@@ -30,7 +30,7 @@ class VAT_Simple(SimpleDSSM):
     def get_normalized_vector(self, d):
         # d needs to be a unit vector at each iteration
 
-        d_norm = F.normalize(d.view(d.size(0), -1), dim=1, p=2).view(d.size())
+        d_norm = F.normalize(d.reshape(d.size(0), -1), dim=1, p=2).reshape(d.size())
         return d_norm
 
 
@@ -47,8 +47,10 @@ class VAT_Simple(SimpleDSSM):
         for _ in range(self.n_power):
             dq = self.XI * self.get_normalized_vector(dq).requires_grad_()
             dd = self.XI * self.get_normalized_vector(dd).requires_grad_()
+
             # run the model with perturbation
             sims_ul_v = self.model(qs_ul, ds_ul, dq, dd)
+
             dist = self.regression_loss(sims_ul, sims_ul_v)
 
             q_grads = torch.autograd.grad(dist, self.model.qs_emb, retain_graph=True)[0]
@@ -64,6 +66,7 @@ class VAT_Simple(SimpleDSSM):
         # generate the virtual adversarial loss for unlabeled data
         # generate perturbation
         rq_vadv, rd_vadv = self.generate_virtual_adversarial_perturbation(qs_ul, ds_ul, sims_ul)
+        # pdb.set_trace()
 
         sims_ul_data = sims_ul.detach()
         sims_ul_vat = self.model(qs_ul, ds_ul, rq_vadv, rd_vadv)

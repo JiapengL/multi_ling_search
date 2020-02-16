@@ -27,15 +27,18 @@ def precision_at_k(sims, qd_index, rels_index, k):
     assert k >= 1
     assert len(qd_index) == len(rels_index) + 1
     n_query = len(rels_index)
-    precision = []
+    precision_nn = []
+    precision_2 = []
     for i in range(n_query):
         r = sims[qd_index[i]:qd_index[i+1]]
         rank = torch.sort(r, descending=True).indices
-        result = [rels_index[i][n] != 0 for n in rank[:k]]
-        precision.append(np.mean(result))
+        result_nn = [rels_index[i][n] != 0 for n in rank[:k]]
+        result_2 = [rels_index[i][n] == 2 for n in rank[:k]]
+        precision_nn.append(np.mean(result_nn))
+        precision_2.append(np.mean(result_2))
         if len(rels_index[i]) < k:
             raise ValueError('Relevance score length < k')
-    return precision
+    return np.mean(precision_nn), np.mean(precision_2)
 
 
 
@@ -91,7 +94,7 @@ def ndcg_at_k(sims, qd_index, rels_index, k):
     ndcg = []
     for i in range(n_query):
         ndcg.append(dcg[i]/dcg_max[i])
-    return ndcg
+    return np.mean(ndcg)
 
 
 

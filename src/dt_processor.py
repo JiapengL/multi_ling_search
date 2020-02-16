@@ -5,26 +5,29 @@ import numpy as np
 import pickle
 from collections import defaultdict
 import math
-
+import random
 from tqdm import tqdm
 from nltk.tokenize import sent_tokenize, word_tokenize
 import torch
 import pdb
+from itertools import compress
+
+
 
 class DataProcessor(object):
 
     def __init__(self, args):
 
         self.caseless = args.caseless
-
+        self.truncate = args.truncate
         if args.build_data:
             print("loading train_data ...")
             self.raw_train = self._build_data(args.train_file, args.caseless)
             print("loading dev_data ...")
             self.raw_dev = self._build_data(args.dev_file, args.caseless)
-            #print("loading test_data ...")
-            #self.raw_test = self._build_data(args.test_file, args.caseless)
-            if args.vat:
+            print("loading test_data ...")
+            self.raw_test = self._build_data(args.test_file, args.caseless)
+            if args.vat or args.self:
                 print("loading unlabelled train_data ...")
                 self.raw_train_ul = self._build_data(args.train_ul_file, args.caseless)
         else:
@@ -32,9 +35,9 @@ class DataProcessor(object):
             self.raw_train = self._load_data(args.train_file)
             print("loading dev_data ...")
             self.raw_dev = self._load_data(args.dev_file)
-            #print("loading test_data ...")
-            #self.raw_test = self._load_data(args.test_file)
-            if args.vat:
+            print("loading test_data ...")
+            self.raw_test = self._load_data(args.test_file)
+            if args.vat or args.self:
                 print("loading unlabelled train_data ...")
                 self.raw_train_ul = self._load_data(args.train_ul_file)
 
@@ -118,6 +121,57 @@ class DataProcessor(object):
 
         return data_ls
 
+
+
+    def generate_batch(self, batch_size, is_shuffle=False, dataset="None"):
+        """Generate the batch of dataset
+        """
+
+        if dataset == "train":
+            data_ls = self.raw_train
+        elif dataset == "dev":
+            data_ls = self.raw_dev
+        elif dataset == "test":
+            data_ls = self.raw_test
+        elif dataset == "unlabel":
+            data_ls = self.raw_train_ul
+
+        if is_shuffle:
+            random.shuffle(data_ls)
+
+        ttl_bn = int(math.ceil(len(data_ls)*1.0/batch_size))
+
+        for bn in range(ttl_bn):
+
+            yield data_ls[(bn*batch_size):(bn+1)*batch_size]
+
+
+
+    def generate_ul_batch(self, batch_size, prediction, label=None, is_shuffle=False):
+        """Generate the batch of dataset
+        """
+        if self.truncate == 0:
+            data_ls = self.raw_train_ul
+        else:
+            data_ls = [data for data, l in zip(self.raw_train_ul, label) if l]
+
+
+        if is_shuffle:
+            assert len(prediction) == len(data_ls)
+            pred = prediction.tolist()
+            data_pred = list(zip(pred, data_ls))
+            random.shuffle(data_pred)
+            prediction, data_ls = zip(*data_pred)
+
+        ttl_bn = int(math.ceil(len(data_ls)*1.0/batch_size))
+
+        for bn in range(ttl_bn):
+
+            yield prediction[(bn*batch_size):(bn+1)*batch_size], data_ls[(bn*batch_size):(bn+1)*batch_size]
+
+
+
+
     def generate_train_batch(self, batch_size, is_shuffle=False):
         """Generate the batch of raw training dataset
         """
@@ -146,7 +200,8 @@ class DataProcessor(object):
             yield data_ls[(bn*batch_size):(bn+1)*batch_size]
 
     def generate_test_batch(self, batch_size):
-        """Generate the batch of raw test dataset
+        """
+        Generate the batch of raw test dataset
         """
 
         data_ls = self.raw_test
@@ -157,13 +212,20 @@ class DataProcessor(object):
 
             yield data_ls[(bn*batch_size):(bn+1)*batch_size]
 
-    def generate_eval_index(self):
+
+    def generate_data_index(self, set):
+        """
+        generate the index for rel == 2
+        """
 
         n_qd_pairs = [0]
         index = []
         count = -1
+        if set == "dev":
+            data_ls = self.raw_dev
+        elif set == "test":
+            data_ls = self.raw_test
 
-        data_ls = self.raw_dev
         for i, line in enumerate(data_ls):
             count += 1
             rel = int(line[0])

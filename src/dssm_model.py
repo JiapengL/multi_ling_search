@@ -23,14 +23,17 @@ class SimpleDSSM(nn.Module):
         self.theta = args.theta if not args.use_sps else args.sps_theta
         self.args = args
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
+        self.epsilon = args.epsilon
         # embedding of q, the input of embedding should be index tensor
         self.q_word_embeds = nn.Embedding(q_vocab_size, self.embed_dim).to(self.device)
         # embedding of d
         self.d_word_embeds = nn.Embedding(d_vocab_size, self.embed_dim).to(self.device)
-        self.out_dim = 32
-        self.q_fc = nn.Linear(self.embed_dim, self.out_dim)
-        self.d_fc = nn.Linear(self.embed_dim, self.out_dim)
+        self.out_dim = 3
+        self.crosslin = nn.Linear(self.embed_dim*2, self.out_dim)
+        self.dropout = nn.Dropout(p=0.5)
+        self.batchnorm = nn.BatchNorm1d(args.embed_dim, momentum=0)
+
+
 
     def init_parameters(self):
         pass
@@ -122,8 +125,9 @@ class SimpleDSSM(nn.Module):
         qs_emb = self.q_word_embeds.forward(qs)
         ds_emb = self.d_word_embeds.forward(ds)
 
-        # qs_emb = self.get_normalized_vector(qs_emb)
-        # ds_emb = self.get_normalized_vector(ds_emb)
+        if self.args.dropout:
+            qs_emb = self.dropout(qs_emb)
+            ds_emb = self.dropout(ds_emb)
 
         self.qs_emb = qs_emb
         self.ds_emb = ds_emb
@@ -134,17 +138,25 @@ class SimpleDSSM(nn.Module):
             qs_emb += q_perturb
             ds_emb += d_perturb
 
-        q_rep = torch.tanh(torch.mean(qs_emb, dim=1))
-        d_rep = torch.tanh(torch.mean(ds_emb, dim=1))
 
-        # q_rep = torch.mean(qs_emb, dim=1)
-        # d_rep = torch.mean(ds_emb, dim=1)
-       # q_o = self.q_fc(q_rep)
-       # d_o = self.q_fc(d_rep)
+        if self.args.batchnorm:
+            q_avg = self.batchnorm(torch.mean(qs_emb, dim=1))
+            d_avg = self.batchnorm(torch.mean(ds_emb, dim=1))
 
-        sims = self.cal_sim(q_rep, d_rep)
+            q_rep = torch.tanh(q_avg)
+            d_rep = torch.tanh(d_avg)
+        else:
+            q_rep = torch.tanh(torch.mean(qs_emb, dim=1))
+            d_rep = torch.tanh(torch.mean(ds_emb, dim=1))
 
-        return sims
+        if self.args.use_cross:
+            qd_cat = torch.cat([q_rep, d_rep], dim=1)
+            qd_cross = self.crosslin(qd_cat)
+            return qd_cross
+
+        else:
+            sims = self.cal_sim(q_rep, d_rep)
+            return sims
 
 
     def predict(self, sims):
@@ -162,7 +174,7 @@ class SimpleDSSM(nn.Module):
         return 1 if rels >= index else -1
         """
 
-        return(torch.gt(rels, index - 0.0001).float() - 0.5) * 2
+        return(torch.ge(rels, index).float() - 0.5) * 2
 
 
     def cal_loss(self, sims, rels):
@@ -173,11 +185,23 @@ class SimpleDSSM(nn.Module):
         :return: average loss
         """
         if not self.args.use_sps:
-            # if using ordinal regression loss
-            loss_theta1 = F.relu(self.__threshold(rels, 1) * (self.theta[0] - sims)).pow(self.args.m)
-            loss_theta2 = F.relu(self.__threshold(rels, 2) * (self.theta[1] - sims)).pow(self.args.m)
+            if self.args.leaky_loss:
+                loss_theta1 = F.relu(self.__threshold(rels, 1) * (self.theta[0] - sims)).pow(self.args.m)
+                loss_theta2 = F.relu(self.__threshold(rels, 2) * (self.theta[1] - sims)).pow(self.args.m)
+                loss_type0 = (rels == 0).float() * (self.theta[0] + 1 - F.relu(self.theta[0] - sims))/(self.theta[0] + 1)
+                loss_type2 = (rels == 2).float() * (1 - self.theta[1] - F.relu(sims - self.theta[1]))/(1 - self.theta[1])
+                loss_type11 = (np.mean(self.theta) - self.theta[0] - F.relu(sims - self.theta[0])) * torch.lt(sims, np.mean(self.theta)).float()/(np.mean(self.theta) - self.theta[0])
+                loss_type12 = (self.theta[1] - np.mean(self.theta) - F.relu(self.theta[1] - sims)) * torch.gt(sims, np.mean(self.theta)).float()/(self.theta[1] - np.mean(self.theta))
+                loss_type1 = (rels == 1).float() * (loss_type11 + loss_type12)
+                loss_leaky = self.epsilon * (loss_type0 + loss_type1 + loss_type2)
+                return torch.mean(loss_theta1 + loss_theta2 + loss_leaky)
 
-            return torch.mean(loss_theta1 + loss_theta2)
+            else:
+                # if using ordinal regression loss
+                loss_theta1 = F.relu(self.__threshold(rels, 1) * (self.theta[0] - sims)).pow(self.args.m)
+                loss_theta2 = F.relu(self.__threshold(rels, 2) * (self.theta[1] - sims)).pow(self.args.m)
+
+                return torch.mean(loss_theta1 + loss_theta2)
 
         else:
             # if using Semantic product search paper loss
@@ -284,31 +308,51 @@ class LSTM(SimpleDSSM):
         super(LSTM, self).__init__(args, q_vocab_size, d_vocab_size)
 
         # layers for query
-        self.hidden_size = 256
-        self.bilstm = nn.LSTM(self.embed_dim, self.hidden_size,
-                              batch_first=True)
-
-
+        self.hidden_size = 64
+        # self.bilstm = nn.LSTM(self.embed_dim, self.hidden_size, batch_first=True, bidirectional=True)
+        self.bilstm = nn.LSTM(self.embed_dim, self.hidden_size, batch_first=True, bidirectional=True)
+        self.GRU = nn.GRU(self.embed_dim, self.hidden_size, batch_first=True, bidirectional=True)
+        #self.encoder_layer = nn.TransformerEncoderLayer(d_model=64, nhead=8, dim_feedforward=128)
+        #self.transformer_model = nn.TransformerEncoder(self.encoder_layer, num_layers=8)
+        self.dropout = nn.Dropout(0.5)
         self.out_size = 64
-        self.lin = nn.Linear(self.hidden_size, self.out_size)
+        self.lin = nn.Linear(self.hidden_size*2, self.out_size)
 
 
-    def forward(self, qs, ds):
 
-        qs_input = self.q_word_embeds.forward(qs)
-        ds_input = self.q_word_embeds.forward(ds)
-        # size = [batch, len, embed_size]
+    def forward(self, qs, ds, q_perturb=None, d_perturb=None):
+
+        qs_emb = self.q_word_embeds.forward(qs)
+        ds_emb = self.d_word_embeds.forward(ds)
+
+        self.qs_emb = qs_emb
+        self.ds_emb = ds_emb
+
         self.bilstm.flatten_parameters()
+        qs_emb = self.dropout(qs_emb)
+        ds_emb = self.dropout(ds_emb)
 
-        qs_out, _ = self.bilstm(qs_input)
-        ds_out, _ = self.bilstm(ds_input)
+        adv_flag = self.training and self.args.vat
 
-        qs_lin = qs_out.transpose(0, 1)[-1]
-        ds_lin = ds_out.transpose(0, 1)[-1]
+        if adv_flag and q_perturb is not None and d_perturb is not None:
+            qs_emb += q_perturb
+            ds_emb += d_perturb
 
-        qs_sem = self.lin(qs_lin)
-        ds_sem = self.lin(ds_lin)
-        # rnn_out:[B, L, hidden_size*2]
-        sims = self.cal_sim(qs_sem, ds_sem)
+        #q_rep = torch.tanh(torch.mean(qs_emb, dim=1))
+
+        qs_out = self.bilstm(qs_emb)
+        #qs_out, _ = self.GRU(qs_emb)
+        #qs_lin = qs_out.transpose(0, 1)[-1]
+        qs_lin = torch.mean(qs_out, dim=1)
+        q_rep = torch.tanh(self.lin(qs_lin))
+
+
+        ds_out = self.bilstm(ds_emb)
+        ds_lin = torch.mean(ds_out, dim=1)
+        #ds_lin = ds_out.transpose(0, 1)[-1]
+        d_rep = torch.tanh(self.lin(ds_lin))
+
+        sims = self.cal_sim(q_rep, d_rep)
 
         return sims
+

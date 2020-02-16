@@ -45,3 +45,5 @@ def numerize(batch, q_vocab, d_vocab, pad_type="back"):
 
 
     return torch.tensor(labels).long(), torch.tensor(q_x).long(), torch.tensor(d_x).long()
+
+
