@@ -19,7 +19,7 @@ from src.adversarial import Adv_Simple, Adv_Deep
 from src.dt_processor import DataProcessor
 from src.utils import numerize
 from src.vat_semi import VAT_Simple
-from src.train_function import train_model, eval_model, test_model, train_ul_model
+from src.train_function import train_model, eval_model, test_model, eval_cross_model,  test_cross_model
 import src.evaluator as eval
 
 import pdb
@@ -58,17 +58,7 @@ def run(args):
     print('Loading running time is:', time2 - time1)
 
 
-    if args.use_adv:
-        if args.deep:
-            model = Adv_Deep(args, len(vocab_q), len(vocab_d))
-        else:
-            model = Adv_Simple(args, len(vocab_q), len(vocab_d))
-
-    elif args.deep:
-        model = DeepDSSM(args, len(vocab_q), len(vocab_d))
-    else:
-        model = SimpleDSSM(args, len(vocab_q), len(vocab_d))
-
+    model = SimpleDSSM(args, len(vocab_q), len(vocab_d))
 
     # whether use gpu
     if args.use_gpu:
@@ -95,31 +85,37 @@ def run(args):
     dev_qd_index, dev_rels_index = data_processor.generate_data_index("dev")
     test_qd_index, test_rels_index = data_processor.generate_data_index("test")
 
-    best_ndcg = 0
-    best_precision_nn = 0
-    best_precision_2 = 0
+    best_f1_nn = 0
+    best_total_accuracy = 0
+    best_class_accuracy = list(0. for i in range(3))
+    best_class_precision = list(0. for i in range(3))
+    best_class_f1 = list(0. for i in range(3))
 
     # training and evaluating without unlabelled data
     train_flag = False
+    patience_count = 0
     for epoch in range(1, 1 + args.epochs):
+
+
         # model training
-
         train_model(args, model, optimizer, data_processor, vocab_q, vocab_d, device, epoch)
-
         # model evaluation
-        dev_precision_nn, dev_precision_2, dev_ndcg = eval_model(args, model, data_processor, vocab_q, vocab_d, device, epoch, dev_qd_index, dev_rels_index)
+        dev_total_accuracy, dev_class_accuracy, dev_class_precision, dev_class_f1, dev_f1_nn = eval_cross_model(args, model, data_processor, vocab_q, vocab_d, device, epoch, dev_qd_index, dev_rels_index)
 
         # test
-        if epoch > 5:
-            if dev_ndcg > best_ndcg:
+        if epoch > 5 or args.epochs < 6:
+            if dev_f1_nn > best_f1_nn:
                 train_flag = True
                 patience_count = 0
-                best_ndcg = dev_ndcg
-                best_precision_nn = dev_precision_nn
-                best_precision_2 = dev_precision_2
+                best_f1_nn = dev_f1_nn
+                best_total_accuracy = dev_total_accuracy
+                best_class_accuracy = dev_class_accuracy
+                best_class_precision = dev_class_precision
+                best_class_f1 = dev_class_f1
+
 
                 # evaluate on test set
-                test_precision_nn, test_precision_2, test_ndcg = test_model(args, model, data_processor, vocab_q, vocab_d, device, epoch, test_qd_index, test_rels_index)
+                test_total_accuracy, test_class_accuracy, test_class_precision, test_class_f1, test_f1_nn = test_cross_model(args, model, data_processor, vocab_q, vocab_d, device, epoch, test_qd_index, test_rels_index)
 
             else:
                 patience_count += 1
@@ -127,68 +123,21 @@ def run(args):
                 break
 
     if train_flag:
-        print('best dev ndcg @ 5: {:05.3f}; best dev precision_nn @ 5: {:05.3f}; best dev precision_2 @ 5: {:05.3f}'.format(
-            best_ndcg, best_precision_nn, best_precision_2))
         print(
-            'best test ndcg @ 5: {:05.3f}; best test precision_nn @ 5: {:05.3f}; best test precision_2 @ 5: {:05.3f}'.format(
-                test_ndcg, test_precision_nn, test_precision_2))
+            'Epoch {}: best_dev total_accuracy: {:05.3f}; best_dev class_2_f1: {:05.3f}; best_dev class_1_f1: {:05.3f}; best_dev_class_nn_f1:  {:05.3f}'
+                .format(epoch, best_total_accuracy, best_class_f1[2], best_class_f1[1], best_f1_nn))
+
+        print(
+            'Epoch {}: best_test total_accuracy: {:05.3f}; best_test class_2_f1: {:05.3f}; best_test class_1_f1: {:05.3f}; best_test_class_nn_f1:  {:05.3f}'
+            .format(epoch, test_total_accuracy, test_class_f1[2], test_class_f1[1], test_f1_nn))
+
+        #torch.save(best_sims, "laplace_11")
+        #flat_index = [item for sublist in dev_rels_index for item in sublist]
+        #torch.save(flat_index, "baseline_index")
     else:
         print('No enough regular train')
 
 
-    ## self training and evaluation
-    if args.use_adv:
-
-        improve_flag = False
-        print('Starting adversarial training:')
-
-        best_adv_ndcg = best_ndcg
-        best_adv_precision_nn = best_precision_nn
-        best_adv_precision_2 = best_precision_2
-
-        for epoch in range(1, 1 + args.adv_epochs):
-            # model training
-            train_model(args, model, optimizer, data_processor, vocab_q, vocab_d, device, epoch, adv_stage=True)
-
-            # model evaluation
-            dev_adv_precision_nn, dev_adv_precision_2, dev_adv_ndcg = eval_model(args, model, data_processor, vocab_q, vocab_d,
-                                                                     device, epoch, dev_qd_index, dev_rels_index)
-
-            # test
-            if epoch > 5:
-                if dev_adv_ndcg > best_adv_ndcg:
-                    patience_count = 0
-                    best_adv_ndcg = dev_adv_ndcg
-                    best_adv_precision_nn = dev_adv_precision_nn
-                    best_adv_precision_2 = dev_adv_precision_2
-
-                    # evaluate on test set
-                    test_adv_precision_nn, test_adv_precision_2, test_adv_ndcg = test_model(args, model, data_processor, vocab_q, vocab_d, device, epoch, test_qd_index, test_rels_index)
-                    improve_flag = True
-                else:
-                    patience_count += 1
-                if patience_count >= args.patience:
-                    break
-
-        print('Before Adversarial training: ')
-        if train_flag:
-            print('best dev ndcg @ 5: {:05.3f}; best dev precision_nn @ 5: {:05.3f}; best dev precision_2 @ 5: {:05.3f}'.format(
-                best_ndcg, best_precision_nn, best_precision_2))
-            print(
-                'best test ndcg @ 5: {:05.3f}; best test precision_nn @ 5: {:05.3f}; best test precision_2 @ 5: {:05.3f}'.format(
-                    test_ndcg, test_precision_nn, test_precision_2))
-        else:
-            print('No enough regular Training')
-
-        print('After Adversarial training: ')
-        if improve_flag:
-            print('best dev ndcg @ 5: {:05.3f}; best dev precision_nn @ 5: {:05.3f}; best dev precision_2 @ 5: {:05.3f}'.format(
-                best_adv_ndcg, best_adv_precision_nn, best_adv_precision_2))
-            print(
-                'best test ndcg @ 5: {:05.3f}; best test precision_nn @ 5: {:05.3f}; best test precision_2 @ 5: {:05.3f}'.format(
-                    test_adv_ndcg, test_adv_precision_nn, test_adv_precision_2))
-        else:
-            print('Adversarial training does not help')
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -200,27 +149,27 @@ if __name__ == '__main__':
                         help='the length of tokenize for each sentence')
 
     parser.add_argument('--train_file', dest='train_file', type=str,
-                        default='/home/liu1769/scratch/data_eng__french/train_l_1000.pkl', help='path to training file')
+                        default='/home/liu1769/scratch/data_eng__swahili/train_15.pkl', help='path to training file')
     parser.add_argument('--train_ul_file', dest='train_ul_file', type=str,
-                        default='/home/liu1769/scratch/data_eng__french/train_ul_1000.pkl',
+                        default='/home/liu1769/scratch/data_eng__french/train_ul_100.pkl',
                         help='path to unlabelled training file')
 
     parser.add_argument('--dev_file', dest='dev_file', type=str,
-                        default='/home/liu1769/scratch/data_eng__french/dev_2000.pkl', help='path to development file')
+                        default='/home/liu1769/scratch/data_eng__swahili/dev_15.pkl', help='path to development file')
     parser.add_argument('--test_file', dest='test_file', type=str,
-                        default='/home/liu1769/scratch/data_eng__french/test_2000.pkl', help='path to test file')
+                        default='/home/liu1769/scratch/data_eng__swahili/test_15.pkl', help='path to test file')
 
     parser.add_argument('--q_vocab_path', dest='q_vocab_path', type=str,
                         default='/home/liu1769/multi_ling_search/word_embed/vocab_en.pkl',
                         help='path to vocabulary for queries')
     parser.add_argument('--d_vocab_path', dest='d_vocab_path', type=str,
-                        default='/home/liu1769/multi_ling_search/word_embed/vocab_fr.pkl',
+                        default='/home/liu1769/multi_ling_search/word_embed/vocab_sw.pkl',
                         help='path to vocabulary embedding for documents')
     parser.add_argument('--q_extn_embedding', dest='q_extn_embedding', type=str,
                         default='/home/liu1769/multi_ling_search/word_embed/polyglot_en_dict.pkl',
                         help='path to pre-trained embedding for queries')
     parser.add_argument('--d_extn_embedding', dest='d_extn_embedding', type=str,
-                        default='/home/liu1769/multi_ling_search/word_embed/polyglot_fr_dict.pkl',
+                        default='/home/liu1769/multi_ling_search/word_embed/polyglot_sw_dict.pkl',
                         help='path to pre-trained embedding for documents')
 
     """
@@ -241,7 +190,7 @@ if __name__ == '__main__':
 
     # training
     parser.add_argument('--use_gpu', dest='use_gpu', action='store_true', help='whether to use gpu')
-    parser.add_argument('--epochs', dest='epochs', type=int, default=60, help='number of epochs to run')
+    parser.add_argument('--epochs', dest='epochs', type=int, default=10, help='number of epochs to run')
     parser.add_argument('--train_batchsize', dest='train_batchsize', type=int, default=128,
                         help='training minibatch size')
     parser.add_argument('--test_batchsize', dest='test_batchsize', type=int, default=128, help='testing minibatch size')
@@ -265,7 +214,7 @@ if __name__ == '__main__':
 
     # self training
     parser.add_argument('--self', dest='self', action='store_true', help='whether do self training')
-    parser.add_argument('--self_epochs_in', dest='self_epochs_in', type=int, default=10, help='number of epochs in the inner loop to run during self training')
+    parser.add_argument('--self_epochs_in', dest='self_epochs_in', type=int, default=1, help='number of epochs in the inner loop to run during self training')
     parser.add_argument('--self_epochs_out', dest='self_epochs_out', type=int, default=5, help='number of epochs in the outer loop to run during self training')
     parser.add_argument('--truncate', dest='truncate', type=float, default=0, help='whether to add thresholding during self training')
 
@@ -288,7 +237,14 @@ if __name__ == '__main__':
                         help='whether use the laplace loss for self training')
     parser.add_argument('--epsilon', dest='epsilon', type=float, default=0.05,
                         help='epsilon for leaky loss function')
-
+    parser.add_argument('--combine', dest='combine', action='store_true',
+                        help='whether use the combine loss for self training')
+    parser.add_argument('--pol', dest='pol', action='store_true',
+                        help='whether use the proportional odds model with laplace')
+    parser.add_argument('--pos', dest='pos', action='store_true',
+                        help='whether use the proportional odds model with sigmoid')
+    parser.add_argument('--pos_trun', dest='pos_trun', action='store_true',
+                        help='whether use the proportional odds model with sigmoid')
     # save
     parser.add_argument('--model_path', dest='model_path', type=str, default='')
 
@@ -303,8 +259,6 @@ if __name__ == '__main__':
                         help='power iterations in virtual adversarial training')
     parser.add_argument('--alpha', dest='alpha', type=float, default=0.01,
                         help='movement multiplier per iteration when generating adversarial examples')
-    parser.add_argument('--adv_epochs', dest='adv_epochs', type=int, default=10, help='number of epochs in the inner loop to run during self training')
-
 
     args = parser.parse_args()
     run(args)

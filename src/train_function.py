@@ -74,6 +74,7 @@ def train_ul_model(args, model, prediction, optimizer, data_processor, vocab_q, 
     model.train()
     loss_ul_total = []
     i = 0
+
     for rels, batch in data_processor.generate_ul_batch(args.train_batchsize, prediction, label, args.is_shuffle):
         #  numerize labeled data
         _, qs, ds = numerize(batch, vocab_q, vocab_d)
@@ -81,7 +82,6 @@ def train_ul_model(args, model, prediction, optimizer, data_processor, vocab_q, 
             rels = torch.IntTensor(rels)
         if args.use_gpu:
             rels, qs, ds = rels.to(device), qs.to(device), ds.to(device)
-
         model.zero_grad()
         sims_l = model(qs, ds)
         loss = model.cal_loss(sims_l, rels)
@@ -95,7 +95,6 @@ def train_ul_model(args, model, prediction, optimizer, data_processor, vocab_q, 
 
     if epoch % 5 == 0:
         print('The training loss of unlabeled data at Epoch ', epoch, 'is {:05.5f}'.format(np.mean(loss_ul_total)))
-
 
 
 
@@ -124,28 +123,121 @@ def eval_model(args, model, data_processor, vocab_q, vocab_d, device, epoch, dev
         loss_dev.append(loss.item())
 
     # evaluation
-    dev_precision_nn, dev_precision_2 = eval.precision_at_k(sims_dev, dev_qd_index, dev_rels_index, 5)
+    dev_map, dev_mrr_nn, dev_mrr_2 = eval.map_mrr(sims_dev, dev_qd_index, dev_rels_index)
+    dev_precision_nn, dev_precision_2, dev_precision_21 = eval.precision_at_k(sims_dev, dev_qd_index, dev_rels_index, 5)
     dev_ndcg = eval.ndcg_at_k(sims_dev, dev_qd_index, dev_rels_index, 5)
+
     if epoch % 5 == 0:
         print(
-            'Epoch {}: dev loss: {:05.5f}; dev ndcg  @ 5: {:05.3f}; dev precision_nn  @ 5: {:05.3f}; dev precision_2  @ 5: {:05.3f}'
-                .format(epoch, np.mean(loss_dev), dev_ndcg, dev_precision_nn, dev_precision_2))
+            'Epoch {}: dev loss: {:05.5f}; dev precision_2  @ 1: {:05.3f}; dev precision_2  @ 5: {:05.3f}; dev precision_nn  @ 5: {:05.3f}; dev ndcg  @ 5: {:05.3f}'
+                .format(epoch, np.mean(loss_dev), dev_precision_21, dev_precision_2, dev_precision_nn, dev_ndcg))
+        print(
+            'Epoch {}: dev map: {:05.3f}; dev mrr_nn: {:05.3f}; dev mrr_2: {:05.3f}'
+                .format(epoch, dev_map, dev_mrr_nn, dev_mrr_2))
         # prediction matrix
+        """
         prediction = eval.predict(sims_dev, args.theta)
         pre_dict = eval.prediction_matrix(prediction, dev_rels_index)
         print('The prediction matrix is following, rows are rels and columns are prediction:')
         print(pre_dict)
+        """
     """
     if epoch > 10:
         scheduler.step()
     """
-    return dev_precision_nn, dev_precision_2, dev_ndcg
+    return dev_precision_nn, dev_precision_2, dev_precision_21, dev_ndcg, dev_map, dev_mrr_nn, dev_mrr_2
+
 
 
 
 
 
 def test_model(args, model, data_processor, vocab_q, vocab_d, device, epoch, test_qd_index, test_rels_index):
+    """
+    model testing
+    """
+
+    model.eval()
+    loss_test = []
+    sims_test = torch.tensor([]).to(device) if args.use_gpu else torch.tensor([])
+    for test_batch in data_processor.generate_batch(args.train_batchsize, is_shuffle=False, dataset="test"):
+
+        rels_test, qs_test, ds_test = numerize(test_batch, vocab_q, vocab_d)
+        if args.use_gpu:
+            rels_test, qs_test, ds_test = rels_test.to(device), qs_test.to(device), ds_test.to(device)
+
+        sims = model(qs_test, ds_test)
+        sims_test = torch.cat([sims_test, sims.data])
+
+        loss = model.cal_loss(sims, rels_test)
+        loss_test.append(loss.item())
+
+
+    test_map, test_mrr_nn, test_mrr_2 = eval.map_mrr(sims_test, test_qd_index, test_rels_index)
+    test_precision_nn, test_precision_2, test_precision_21 = eval.precision_at_k(sims_test, test_qd_index, test_rels_index, 5)
+    test_ndcg = eval.ndcg_at_k(sims_test, test_qd_index, test_rels_index, 5)
+    if epoch % 5 == 0:
+        print(
+            'Epoch {}: test loss: {:05.5f}; test precision_2  @ 1: {:05.3f}; test precision_2  @ 5: {:05.3f}; test precision_nn  @ 5: {:05.3f}; test ndcg  @ 5: {:05.3f}'
+                .format(epoch, np.mean(loss_test), test_precision_21, test_precision_2, test_precision_nn, test_ndcg))
+        print(
+            'Epoch {}: test map: {:05.3f}; test mrr_nn: {:05.3f}; test mrr_2: {:05.3f}'
+                .format(epoch, test_map, test_mrr_nn, test_mrr_2))
+    return test_precision_nn, test_precision_2, test_precision_21, test_ndcg, test_map, test_mrr_nn, test_mrr_2
+
+
+
+
+
+
+
+def eval_cross_model(args, model, data_processor, vocab_q, vocab_d, device, epoch, dev_qd_index, dev_rels_index):
+    """
+    model evaluation
+    """
+
+    model.eval()
+    loss_dev = []
+    sims_dev = torch.tensor([]).to(device) if args.use_gpu else torch.tensor([])
+    for dev_batch in data_processor.generate_batch(args.train_batchsize, is_shuffle=False, dataset="dev"):
+
+        rels_dev, qs_dev, ds_dev = numerize(dev_batch, vocab_q, vocab_d)
+        if args.use_gpu:
+            rels_dev, qs_dev, ds_dev = rels_dev.to(device), qs_dev.to(device), ds_dev.to(device)
+
+        sims = model(qs_dev, ds_dev)
+        sims_dev = torch.cat([sims_dev, sims.data])
+        loss = model.cal_loss(sims, rels_dev)
+        loss_dev.append(loss.item())
+
+    if args.use_cross:
+        pred = eval.predict_cross(sims_dev)
+    else:
+        pred = eval.predict(sims_dev, args.theta)
+
+    dev_label = torch.LongTensor([item for sublist in dev_rels_index for item in sublist]).to(device)   # evaluation
+    class_total, class_correct, class_pred = eval.prediction_accuracy(pred, dev_label)
+    total_accuracy = sum(class_correct)/sum(class_total)
+    class_accuracy = list(0. for i in range(3))
+    class_precision = list(0. for i in range(3))
+    class_f1 = list(0. for i in range(3))
+    for i in range(3):
+        class_accuracy[i] = class_correct[i]/class_total[i]
+        class_precision[i] = class_correct[i]/(class_pred[i]+0.001)
+        class_f1[i] = 2 * class_accuracy[i] * class_precision[i]/(class_accuracy[i] + class_precision[i] + 0.001)
+    f1_nn = (class_f1[1] + class_f1[2])/2
+
+    if epoch % 5 == 0:
+        print(
+            'Epoch {}: dev loss: {:05.5f}; dev total_accuracy: {:05.3f}; dev class_2_f1: {:05.3f}; dev class_1_f1: {:05.3f}; dev_class_nn_f1:  {:05.3f}'
+            .format(epoch, np.mean(loss_dev), total_accuracy, class_f1[2], class_f1[1], f1_nn))
+
+    return total_accuracy, class_accuracy, class_precision, class_f1, f1_nn
+
+
+
+
+def test_cross_model(args, model, data_processor, vocab_q, vocab_d, device, epoch, test_qd_index, test_rels_index):
     """
     model evaluation
     """
@@ -165,14 +257,37 @@ def test_model(args, model, data_processor, vocab_q, vocab_d, device, epoch, tes
         loss = model.cal_loss(sims, rels_test)
         loss_test.append(loss.item())
 
-    test_precision_nn, test_precision_2 = eval.precision_at_k(sims_test, test_qd_index, test_rels_index, 5)
-    test_ndcg = eval.ndcg_at_k(sims_test, test_qd_index, test_rels_index, 5)
+    if args.use_cross:
+        pred = eval.predict_cross(sims_test)
+    else:
+        pred = eval.predict(sims_test, args.theta)
+
+    test_label = torch.LongTensor([item for sublist in test_rels_index for item in sublist]).to(device)   # evaluation
+
+    class_total, class_correct, class_pred = eval.prediction_accuracy(pred, test_label)
+    total_accuracy = sum(class_correct)/sum(class_total)
+    class_accuracy = list(0. for i in range(3))
+    class_precision = list(0. for i in range(3))
+    class_f1 = list(0. for i in range(3))
+    for i in range(3):
+        class_accuracy[i] = class_correct[i]/class_total[i]
+        class_precision[i] = class_correct[i]/(class_pred[i]+0.001)
+        class_f1[i] = 2 * class_accuracy[i] * class_precision[i]/(class_accuracy[i] + class_precision[i] + 0.001)
+    f1_nn = (class_f1[1] + class_f1[2])/2
+
     if epoch % 5 == 0:
         print(
-            'Epoch {}: test ndcg  @ 5: {:05.3f}; test precision_nn  @ 5: {:05.3f}; test precision_2  @ 5: {:05.3f}'.format(
-                epoch, test_ndcg, test_precision_nn, test_precision_2))
+            'Epoch {}: test loss: {:05.5f}; test total_accuracy: {:05.3f}; test class_2_f1: {:05.3f}; test class_1_f1: {:05.3f}; test_class_nn_f1:  {:05.3f}'
+            .format(epoch, np.mean(loss_test), total_accuracy, class_f1[2], class_f1[1], f1_nn))
 
-    return test_precision_nn, test_precision_2, test_ndcg
+    return total_accuracy, class_accuracy, class_precision, class_f1, f1_nn
+
+
+
+
+
+
+
 
 
 

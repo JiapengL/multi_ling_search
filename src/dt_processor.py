@@ -163,6 +163,7 @@ class DataProcessor(object):
             random.shuffle(data_pred)
             prediction, data_ls = zip(*data_pred)
 
+
         ttl_bn = int(math.ceil(len(data_ls)*1.0/batch_size))
 
         for bn in range(ttl_bn):
@@ -225,6 +226,8 @@ class DataProcessor(object):
             data_ls = self.raw_dev
         elif set == "test":
             data_ls = self.raw_test
+        elif set == "train":
+            data_ls = self.raw_train
 
         for i, line in enumerate(data_ls):
             count += 1

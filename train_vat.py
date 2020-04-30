@@ -58,17 +58,7 @@ def run(args):
     print('Loading running time is:', time2 - time1)
 
 
-    if args.use_adv:
-        if args.deep:
-            model = Adv_Deep(args, len(vocab_q), len(vocab_d))
-        else:
-            model = Adv_Simple(args, len(vocab_q), len(vocab_d))
-
-    elif args.deep:
-        model = DeepDSSM(args, len(vocab_q), len(vocab_d))
-    else:
-        model = SimpleDSSM(args, len(vocab_q), len(vocab_d))
-
+    model = SimpleDSSM(args, len(vocab_q), len(vocab_d))
 
     # whether use gpu
     if args.use_gpu:
@@ -98,25 +88,29 @@ def run(args):
     best_ndcg = 0
     best_precision_nn = 0
     best_precision_2 = 0
+    best_sims = []
 
     # training and evaluating without unlabelled data
     train_flag = False
+    patience_count = 0
     for epoch in range(1, 1 + args.epochs):
-        # model training
 
+
+        # model training
         train_model(args, model, optimizer, data_processor, vocab_q, vocab_d, device, epoch)
 
         # model evaluation
-        dev_precision_nn, dev_precision_2, dev_ndcg = eval_model(args, model, data_processor, vocab_q, vocab_d, device, epoch, dev_qd_index, dev_rels_index)
+        dev_precision_nn, dev_precision_2, dev_ndcg, sims_dev = eval_model(args, model, data_processor, vocab_q, vocab_d, device, epoch, dev_qd_index, dev_rels_index)
 
         # test
-        if epoch > 5:
+        if epoch > 5 or args.epochs < 6:
             if dev_ndcg > best_ndcg:
                 train_flag = True
                 patience_count = 0
                 best_ndcg = dev_ndcg
                 best_precision_nn = dev_precision_nn
                 best_precision_2 = dev_precision_2
+                best_sims = sims_dev
 
                 # evaluate on test set
                 test_precision_nn, test_precision_2, test_ndcg = test_model(args, model, data_processor, vocab_q, vocab_d, device, epoch, test_qd_index, test_rels_index)
@@ -127,68 +121,102 @@ def run(args):
                 break
 
     if train_flag:
-        print('best dev ndcg @ 5: {:05.3f}; best dev precision_nn @ 5: {:05.3f}; best dev precision_2 @ 5: {:05.3f}'.format(
-            best_ndcg, best_precision_nn, best_precision_2))
+        print(
+            'best dev ndcg @ 5: {:05.3f}; best dev precision_nn @ 5: {:05.3f}; best dev precision_2 @ 5: {:05.3f}'.format(
+                best_ndcg, best_precision_nn, best_precision_2))
         print(
             'best test ndcg @ 5: {:05.3f}; best test precision_nn @ 5: {:05.3f}; best test precision_2 @ 5: {:05.3f}'.format(
                 test_ndcg, test_precision_nn, test_precision_2))
+        torch.save(best_sims, "laplace_8")
+        #flat_index = [item for sublist in dev_rels_index for item in sublist]
+        #torch.save(flat_index, "baseline_index")
     else:
         print('No enough regular train')
 
 
     ## self training and evaluation
-    if args.use_adv:
+    if args.self:
 
         improve_flag = False
-        print('Starting adversarial training:')
+        print('Starting self training with unlabeled data:')
+        best_ul_ndcg = best_ndcg
+        best_ul_precision_nn = best_precision_nn
+        best_ul_precision_2 = best_precision_2
 
-        best_adv_ndcg = best_ndcg
-        best_adv_precision_nn = best_precision_nn
-        best_adv_precision_2 = best_precision_2
+        for epoch_out in range(1, 1 + args.self_epochs_out):
+            print('The current training epoch of unlabeled data is ', epoch_out)
+            # In each epoch, the unlabeled data are labeled with current model, then model is updated use label and unlabeled data
 
-        for epoch in range(1, 1 + args.adv_epochs):
-            # model training
-            train_model(args, model, optimizer, data_processor, vocab_q, vocab_d, device, epoch, adv_stage=True)
+            # predict unlabeled data from the current model
+            sims_ul = torch.tensor([]).to(device) if args.use_gpu else torch.tensor([])
 
-            # model evaluation
-            dev_adv_precision_nn, dev_adv_precision_2, dev_adv_ndcg = eval_model(args, model, data_processor, vocab_q, vocab_d,
-                                                                     device, epoch, dev_qd_index, dev_rels_index)
+            for ul_batch in data_processor.generate_batch(args.train_batchsize, is_shuffle=False, dataset="unlabel"):
 
-            # test
-            if epoch > 5:
-                if dev_adv_ndcg > best_adv_ndcg:
-                    patience_count = 0
-                    best_adv_ndcg = dev_adv_ndcg
-                    best_adv_precision_nn = dev_adv_precision_nn
-                    best_adv_precision_2 = dev_adv_precision_2
+                _, qs_ul, ds_ul = numerize(ul_batch, vocab_q, vocab_d)
+                if args.use_gpu:
+                    qs_ul, ds_ul = qs_ul.to(device), ds_ul.to(device)
 
-                    # evaluate on test set
-                    test_adv_precision_nn, test_adv_precision_2, test_adv_ndcg = test_model(args, model, data_processor, vocab_q, vocab_d, device, epoch, test_qd_index, test_rels_index)
-                    improve_flag = True
+                sims = model(qs_ul, ds_ul)
+                sims_ul = torch.cat([sims_ul, sims.data])
+
+            # Predict the label for unlabeled data, either with or without truncating
+            if args.truncate != 0:
+                ul_keep_1 = (abs(sims_ul - args.theta[0]) > args.truncate)
+                ul_keep_2 = (abs(sims_ul - args.theta[1]) > 0.05)
+                ul_keep = ul_keep_1 * ul_keep_2
+                sims_ul_trun = sims_ul[ul_keep]
+                prediction = eval.predict(sims_ul_trun, args.theta)
+            else:
+                prediction = eval.predict(sims_ul, args.theta)
+
+            # train model with both label and unlabeled data
+            for epoch in range(1, 1 + args.self_epochs_in):
+                # model training
+                train_model(args, model, optimizer, data_processor, vocab_q, vocab_d, device, epoch)
+
+
+                if args.truncate != 0:
+                    train_ul_model(args, model, prediction, optimizer, data_processor, vocab_q, vocab_d, device, epoch, label=ul_keep)
                 else:
-                    patience_count += 1
-                if patience_count >= args.patience:
-                    break
+                    train_ul_model(args, model, prediction, optimizer, data_processor, vocab_q, vocab_d, device, epoch)
 
-        print('Before Adversarial training: ')
-        if train_flag:
-            print('best dev ndcg @ 5: {:05.3f}; best dev precision_nn @ 5: {:05.3f}; best dev precision_2 @ 5: {:05.3f}'.format(
-                best_ndcg, best_precision_nn, best_precision_2))
-            print(
-                'best test ndcg @ 5: {:05.3f}; best test precision_nn @ 5: {:05.3f}; best test precision_2 @ 5: {:05.3f}'.format(
-                    test_ndcg, test_precision_nn, test_precision_2))
-        else:
-            print('No enough regular Training')
+                # model evaluation
+                dev_ul_precision_nn, dev_ul_precision_2, dev_ul_ndcg, _ = eval_model(args, model, data_processor, vocab_q, vocab_d,
+                                                                         device, epoch, dev_qd_index, dev_rels_index)
 
-        print('After Adversarial training: ')
+
+                # test
+                if epoch > 5 or args.self_epochs_in < 6:
+                    if dev_ul_ndcg > best_ul_ndcg:
+                        patience_count = 0
+                        best_ul_ndcg = dev_ul_ndcg
+                        best_ul_precision_nn = dev_ul_precision_nn
+                        best_ul_precision_2 = dev_ul_precision_2
+
+                        # evaluate on test set
+                        test_ul_precision_nn, test_ul_precision_2, test_ul_ndcg = test_model(args, model, data_processor, vocab_q, vocab_d, device, epoch, test_qd_index, test_rels_index)
+                        improve_flag = True
+                    else:
+                        patience_count += 1
+                    if patience_count >= args.patience:
+                        break
+
+        print('Before self training: ')
+        print('best dev ndcg @ 5: {:05.3f}; best dev precision_nn @ 5: {:05.3f}; best dev precision_2 @ 5: {:05.3f}'.format(
+            best_ndcg, best_precision_nn, best_precision_2))
+        print(
+            'best test ndcg @ 5: {:05.3f}; best test precision_nn @ 5: {:05.3f}; best test precision_2 @ 5: {:05.3f}'.format(
+                test_ndcg, test_precision_nn, test_precision_2))
+
+        print('After self training: ')
         if improve_flag:
             print('best dev ndcg @ 5: {:05.3f}; best dev precision_nn @ 5: {:05.3f}; best dev precision_2 @ 5: {:05.3f}'.format(
-                best_adv_ndcg, best_adv_precision_nn, best_adv_precision_2))
+                best_ul_ndcg, best_ul_precision_nn, best_ul_precision_2))
             print(
                 'best test ndcg @ 5: {:05.3f}; best test precision_nn @ 5: {:05.3f}; best test precision_2 @ 5: {:05.3f}'.format(
-                    test_adv_ndcg, test_adv_precision_nn, test_adv_precision_2))
+                    test_ul_ndcg, test_ul_precision_nn, test_ul_precision_2))
         else:
-            print('Adversarial training does not help')
+            print('Self training does not help')
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -303,8 +331,6 @@ if __name__ == '__main__':
                         help='power iterations in virtual adversarial training')
     parser.add_argument('--alpha', dest='alpha', type=float, default=0.01,
                         help='movement multiplier per iteration when generating adversarial examples')
-    parser.add_argument('--adv_epochs', dest='adv_epochs', type=int, default=10, help='number of epochs in the inner loop to run during self training')
-
 
     args = parser.parse_args()
     run(args)

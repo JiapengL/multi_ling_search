@@ -72,7 +72,7 @@ def divide_queries(rel_dict):
     """
 
     # all_queries = set([q_id for q_id, v in rel_dict.items()])
-    all_queries = set([q_id for q_id, v in rel_dict.items()][:100000])
+    all_queries = set([q_id for q_id, v in rel_dict.items()][:25000])
 
     test_q_num = int(len(all_queries)*0.2)
 
@@ -139,8 +139,8 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--query_path', dest='query_path', type=str, default="/home/liu1769/scratch/english/wiki_en.queries")
-    parser.add_argument('--doc_path', dest='doc_path', type=str, default="/home/liu1769/scratch/french/wiki_fr.documents")
-    parser.add_argument('--rel_path', dest='rel_path', type=str, default="/home/liu1769/scratch/french/en2fr.rel")
+    parser.add_argument('--doc_path', dest='doc_path', type=str, default="/home/liu1769/scratch/italian/wiki_it.documents")
+    parser.add_argument('--rel_path', dest='rel_path', type=str, default="/home/liu1769/scratch/italian/en2it.rel")
     parser.add_argument('--train_negsample', dest='train_negsample', type=int, default=40)
     parser.add_argument('--test_negsample', dest='test_negsample', type=int, default=40)
 
@@ -151,6 +151,7 @@ def main():
     print("Start to process queries in English and docs in {}...".format(lang2))
 
     path_to_save = 'data_'+lang1+'__'+lang2
+    #path_to_save = 'data_'+lang1+'__'+lang2+'neg'+str(args.train_negsample)
     if not os.path.exists(path_to_save):
         os.mkdir(path_to_save)
 
@@ -168,11 +169,11 @@ def main():
     test_rel_dict = sample_neg(test_queries_set, rel_dict, doc_dict, args.test_negsample)
 
     print("Creating training set...")
-    create_dataset(train_queries_set, rel_dict, query_dict, doc_dict, path_to_save+'/train.csv')
+    create_dataset(train_queries_set, rel_dict, query_dict, doc_dict, path_to_save+'/train_15.csv')
     print("Creating validation set...")
-    create_dataset(dev_queries_set, rel_dict, query_dict, doc_dict, path_to_save+'/dev.csv')
+    create_dataset(dev_queries_set, rel_dict, query_dict, doc_dict, path_to_save+'/dev_15.csv')
     print("Creating testing set...")
-    create_dataset(test_queries_set, rel_dict, query_dict, doc_dict, path_to_save+'/test.csv')
+    create_dataset(test_queries_set, rel_dict, query_dict, doc_dict, path_to_save+'/test_15.csv')
 
     print("Data set successfully created!")
 

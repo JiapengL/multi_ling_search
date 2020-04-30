@@ -27,10 +27,10 @@ from operator import itemgetter
 
 
 def run(args):
-    random.seed(666)
-    np.random.seed(666)
-    torch.cuda.manual_seed(666)
-    torch.manual_seed(666)
+    random.seed(222)
+    np.random.seed(222)
+    torch.cuda.manual_seed(222)
+    torch.manual_seed(222)
 
     print('The theta is ', args.theta)
     print('The m is ', args.m)
@@ -57,8 +57,12 @@ def run(args):
     time2 = time.time()
     print('Loading running time is:', time2 - time1)
 
-
-    model = SimpleDSSM(args, len(vocab_q), len(vocab_d))
+    if args.deep:
+        model = DeepDSSM(args, len(vocab_q), len(vocab_d))
+    elif args.lstm:
+        model = LSTM(args, len(vocab_q), len(vocab_d))
+    else:
+        model = SimpleDSSM(args, len(vocab_q), len(vocab_d))
 
     # whether use gpu
     if args.use_gpu:
@@ -82,24 +86,31 @@ def run(args):
         optimizer, step_size=5, gamma=0.9)
 
     # generate data index
+    qd_index, rels_index = data_processor.generate_data_index("train")
+    print(len(qd_index), qd_index[-1])
+    pdb.set_trace()
+
     dev_qd_index, dev_rels_index = data_processor.generate_data_index("dev")
     test_qd_index, test_rels_index = data_processor.generate_data_index("test")
 
     best_ndcg = 0
     best_precision_nn = 0
     best_precision_2 = 0
-
+    best_precision_21 = 0
+    best_map = 0
+    best_mrr_nn = 0
+    best_mrr_2 = 0
     # training and evaluating without unlabelled data
     train_flag = False
     patience_count = 0
+    time1 = time.time()
     for epoch in range(1, 1 + args.epochs):
 
 
         # model training
         train_model(args, model, optimizer, data_processor, vocab_q, vocab_d, device, epoch)
-
         # model evaluation
-        dev_precision_nn, dev_precision_2, dev_ndcg = eval_model(args, model, data_processor, vocab_q, vocab_d, device, epoch, dev_qd_index, dev_rels_index)
+        dev_precision_nn, dev_precision_2, dev_precision_21, dev_ndcg, dev_map, dev_mrr_nn, dev_mrr_2 = eval_model(args, model, data_processor, vocab_q, vocab_d, device, epoch, dev_qd_index, dev_rels_index)
 
         # test
         if epoch > 5 or args.epochs < 6:
@@ -109,9 +120,12 @@ def run(args):
                 best_ndcg = dev_ndcg
                 best_precision_nn = dev_precision_nn
                 best_precision_2 = dev_precision_2
-
+                best_precision_21 = dev_precision_21
+                best_map = dev_map
+                best_mrr_2 = dev_mrr_2
+                best_mrr_nn = dev_mrr_nn
                 # evaluate on test set
-                test_precision_nn, test_precision_2, test_ndcg = test_model(args, model, data_processor, vocab_q, vocab_d, device, epoch, test_qd_index, test_rels_index)
+                test_precision_nn, test_precision_2, test_precision_21, test_ndcg, test_map, test_mrr_nn, test_mrr_2 = test_model(args, model, data_processor, vocab_q, vocab_d, device, epoch, test_qd_index, test_rels_index)
 
             else:
                 patience_count += 1
@@ -120,14 +134,18 @@ def run(args):
 
     if train_flag:
         print(
-            'best dev ndcg @ 5: {:05.3f}; best dev precision_nn @ 5: {:05.3f}; best dev precision_2 @ 5: {:05.3f}'.format(
-                best_ndcg, best_precision_nn, best_precision_2))
+            'best_dev precision_2  @ 1: {:05.3f}; best_dev precision_2  @ 5: {:05.3f}; best_dev precision_nn  @ 5: {:05.3f}; best_dev ndcg  @ 5: {:05.3f}; best_dev map: {:05.3f}; best_dev mrr_nn: {:05.3f}; best_dev mrr_2: {:05.3f}'.format(
+                best_precision_21, best_precision_2, best_precision_nn, best_ndcg, best_map, best_mrr_nn, best_mrr_2))
         print(
-            'best test ndcg @ 5: {:05.3f}; best test precision_nn @ 5: {:05.3f}; best test precision_2 @ 5: {:05.3f}'.format(
-                test_ndcg, test_precision_nn, test_precision_2))
+            'test precision_2  @ 1: {:05.3f}; test precision_2  @ 5: {:05.3f}; test precision_nn  @ 5: {:05.3f}; test ndcg  @ 5: {:05.3f}; test map: {:05.3f}; test mrr_nn: {:05.3f}; test mrr_2: {:05.3f}'.format(
+                test_precision_21, test_precision_2, test_precision_nn, test_ndcg, test_map, test_mrr_nn, test_mrr_2))
+        #torch.save(best_sims, "laplace_11")
+        #flat_index = [item for sublist in dev_rels_index for item in sublist]
+        #torch.save(flat_index, "baseline_index")
     else:
         print('No enough regular train')
-
+    time2 = time.time()
+    print('The running time is', time2 - time1)
 
     ## self training and evaluation
     if args.self:
@@ -137,6 +155,7 @@ def run(args):
         best_ul_ndcg = best_ndcg
         best_ul_precision_nn = best_precision_nn
         best_ul_precision_2 = best_precision_2
+        best_ul_precision_21 = best_precision_21
 
         for epoch_out in range(1, 1 + args.self_epochs_out):
             print('The current training epoch of unlabeled data is ', epoch_out)
@@ -169,14 +188,16 @@ def run(args):
                 # model training
                 train_model(args, model, optimizer, data_processor, vocab_q, vocab_d, device, epoch)
 
+
                 if args.truncate != 0:
                     train_ul_model(args, model, prediction, optimizer, data_processor, vocab_q, vocab_d, device, epoch, label=ul_keep)
                 else:
                     train_ul_model(args, model, prediction, optimizer, data_processor, vocab_q, vocab_d, device, epoch)
 
                 # model evaluation
-                dev_ul_precision_nn, dev_ul_precision_2, dev_ul_ndcg = eval_model(args, model, data_processor, vocab_q, vocab_d,
+                dev_ul_precision_nn, dev_ul_precision_2, dev_ul_precision_21, dev_ul_ndcg = eval_model(args, model, data_processor, vocab_q, vocab_d,
                                                                          device, epoch, dev_qd_index, dev_rels_index)
+
 
                 # test
                 if epoch > 5 or args.self_epochs_in < 6:
@@ -187,7 +208,7 @@ def run(args):
                         best_ul_precision_2 = dev_ul_precision_2
 
                         # evaluate on test set
-                        test_ul_precision_nn, test_ul_precision_2, test_ul_ndcg = test_model(args, model, data_processor, vocab_q, vocab_d, device, epoch, test_qd_index, test_rels_index)
+                        test_ul_precision_nn, test_ul_precision_2, test_ul_precision_21, test_ul_ndcg = test_model(args, model, data_processor, vocab_q, vocab_d, device, epoch, test_qd_index, test_rels_index)
                         improve_flag = True
                     else:
                         patience_count += 1
@@ -195,19 +216,19 @@ def run(args):
                         break
 
         print('Before self training: ')
-        print('best dev ndcg @ 5: {:05.3f}; best dev precision_nn @ 5: {:05.3f}; best dev precision_2 @ 5: {:05.3f}'.format(
-            best_ndcg, best_precision_nn, best_precision_2))
+        print('best dev ndcg @ 5: {:05.3f}; best dev precision_nn @ 5: {:05.3f}; best dev precision_2 @ 5: {:05.3f}; best dev precision_2 @ 1: {:05.3f}'.format(
+            best_ndcg, best_precision_nn, best_precision_2, best_precision_21))
         print(
-            'best test ndcg @ 5: {:05.3f}; best test precision_nn @ 5: {:05.3f}; best test precision_2 @ 5: {:05.3f}'.format(
-                test_ndcg, test_precision_nn, test_precision_2))
+            'best test ndcg @ 5: {:05.3f}; best test precision_nn @ 5: {:05.3f}; best test precision_2 @ 5: {:05.3f}; best test precision_2 @ 1: {:05.3f}'.format(
+                test_ndcg, test_precision_nn, test_precision_2, best_precision_21))
 
         print('After self training: ')
         if improve_flag:
-            print('best dev ndcg @ 5: {:05.3f}; best dev precision_nn @ 5: {:05.3f}; best dev precision_2 @ 5: {:05.3f}'.format(
-                best_ul_ndcg, best_ul_precision_nn, best_ul_precision_2))
+            print('best dev ndcg @ 5: {:05.3f}; best dev precision_nn @ 5: {:05.3f}; best dev precision_2 @ 5: {:05.3f}; best dev precision_2 @ 1: {:05.3f}'.format(
+                best_ul_ndcg, best_ul_precision_nn, best_ul_precision_2, best_ul_precision_21))
             print(
-                'best test ndcg @ 5: {:05.3f}; best test precision_nn @ 5: {:05.3f}; best test precision_2 @ 5: {:05.3f}'.format(
-                    test_ul_ndcg, test_ul_precision_nn, test_ul_precision_2))
+                'best test ndcg @ 5: {:05.3f}; best test precision_nn @ 5: {:05.3f}; best test precision_2 @ 5: {:05.3f}; best test precision_2 @ 5: {:05.3f}'.format(
+                    test_ul_ndcg, test_ul_precision_nn, test_ul_precision_2, test_ul_precision_21))
         else:
             print('Self training does not help')
 
@@ -221,27 +242,27 @@ if __name__ == '__main__':
                         help='the length of tokenize for each sentence')
 
     parser.add_argument('--train_file', dest='train_file', type=str,
-                        default='/home/liu1769/scratch/data_eng__french/train_l_1000.pkl', help='path to training file')
+                        default='/home/liu1769/scratch/data_eng__swahili/train_15.pkl', help='path to training file')
     parser.add_argument('--train_ul_file', dest='train_ul_file', type=str,
-                        default='/home/liu1769/scratch/data_eng__french/train_ul_1000.pkl',
+                        default='/home/liu1769/scratch/data_eng__frenchneg80/train_ul_100.pkl',
                         help='path to unlabelled training file')
 
     parser.add_argument('--dev_file', dest='dev_file', type=str,
-                        default='/home/liu1769/scratch/data_eng__french/dev_2000.pkl', help='path to development file')
+                        default='/home/liu1769/scratch/data_eng__swahili/dev_15.pkl', help='path to development file')
     parser.add_argument('--test_file', dest='test_file', type=str,
-                        default='/home/liu1769/scratch/data_eng__french/test_2000.pkl', help='path to test file')
+                        default='/home/liu1769/scratch/data_eng__swahili/test_15.pkl', help='path to test file')
 
     parser.add_argument('--q_vocab_path', dest='q_vocab_path', type=str,
                         default='/home/liu1769/multi_ling_search/word_embed/vocab_en.pkl',
                         help='path to vocabulary for queries')
     parser.add_argument('--d_vocab_path', dest='d_vocab_path', type=str,
-                        default='/home/liu1769/multi_ling_search/word_embed/vocab_fr.pkl',
+                        default='/home/liu1769/multi_ling_search/word_embed/vocab_tl.pkl',
                         help='path to vocabulary embedding for documents')
     parser.add_argument('--q_extn_embedding', dest='q_extn_embedding', type=str,
                         default='/home/liu1769/multi_ling_search/word_embed/polyglot_en_dict.pkl',
                         help='path to pre-trained embedding for queries')
     parser.add_argument('--d_extn_embedding', dest='d_extn_embedding', type=str,
-                        default='/home/liu1769/multi_ling_search/word_embed/polyglot_fr_dict.pkl',
+                        default='/home/liu1769/multi_ling_search/word_embed/polyglot_tl_dict.pkl',
                         help='path to pre-trained embedding for documents')
 
     """
@@ -262,7 +283,7 @@ if __name__ == '__main__':
 
     # training
     parser.add_argument('--use_gpu', dest='use_gpu', action='store_true', help='whether to use gpu')
-    parser.add_argument('--epochs', dest='epochs', type=int, default=60, help='number of epochs to run')
+    parser.add_argument('--epochs', dest='epochs', type=int, default=10, help='number of epochs to run')
     parser.add_argument('--train_batchsize', dest='train_batchsize', type=int, default=128,
                         help='training minibatch size')
     parser.add_argument('--test_batchsize', dest='test_batchsize', type=int, default=128, help='testing minibatch size')
@@ -286,7 +307,7 @@ if __name__ == '__main__':
 
     # self training
     parser.add_argument('--self', dest='self', action='store_true', help='whether do self training')
-    parser.add_argument('--self_epochs_in', dest='self_epochs_in', type=int, default=10, help='number of epochs in the inner loop to run during self training')
+    parser.add_argument('--self_epochs_in', dest='self_epochs_in', type=int, default=1, help='number of epochs in the inner loop to run during self training')
     parser.add_argument('--self_epochs_out', dest='self_epochs_out', type=int, default=5, help='number of epochs in the outer loop to run during self training')
     parser.add_argument('--truncate', dest='truncate', type=float, default=0, help='whether to add thresholding during self training')
 
@@ -303,9 +324,20 @@ if __name__ == '__main__':
                         help='whether use the cross entropy loss')
     parser.add_argument('--leaky_loss', dest='leaky_loss', action='store_true',
                         help='whether use the leaky loss for self training')
+    parser.add_argument('--im_loss', dest='im_loss', action='store_true',
+                        help='whether use the immediate threshold loss for self training')
+    parser.add_argument('--pol', dest='pol', action='store_true',
+                        help='whether use the proportional odds model with laplace')
+    parser.add_argument('--pos', dest='pos', action='store_true',
+                        help='whether use the proportional odds model with sigmoid')
+    parser.add_argument('--pos_trun', dest='pos_trun', action='store_true',
+                        help='whether use the proportional odds model with sigmoid')
+    parser.add_argument('--laplace', dest='laplace', action='store_true',
+                        help='whether use the laplace loss for self training')
     parser.add_argument('--epsilon', dest='epsilon', type=float, default=0.05,
                         help='epsilon for leaky loss function')
-
+    parser.add_argument('--combine', dest='combine', action='store_true',
+                        help='whether use the combine loss for self training')
     # save
     parser.add_argument('--model_path', dest='model_path', type=str, default='')
 
