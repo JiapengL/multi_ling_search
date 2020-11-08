@@ -1,2 +1,1 @@
-# multi_ling_search
-Search research project on multi-ling
+# Cross-Lingual Document Retrieval with Smooth Learning
