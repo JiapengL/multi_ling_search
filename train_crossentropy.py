@@ -149,27 +149,27 @@ if __name__ == '__main__':
                         help='the length of tokenize for each sentence')
 
     parser.add_argument('--train_file', dest='train_file', type=str,
-                        default='/home/liu1769/scratch/data_eng__swahili/train_15.pkl', help='path to training file')
+                        default='/home/liu1769/scratch/data_eng__italian/train_15.pkl', help='path to training file')
     parser.add_argument('--train_ul_file', dest='train_ul_file', type=str,
                         default='/home/liu1769/scratch/data_eng__french/train_ul_100.pkl',
                         help='path to unlabelled training file')
 
     parser.add_argument('--dev_file', dest='dev_file', type=str,
-                        default='/home/liu1769/scratch/data_eng__swahili/dev_15.pkl', help='path to development file')
+                        default='/home/liu1769/scratch/data_eng__italian/dev_15.pkl', help='path to development file')
     parser.add_argument('--test_file', dest='test_file', type=str,
-                        default='/home/liu1769/scratch/data_eng__swahili/test_15.pkl', help='path to test file')
+                        default='/home/liu1769/scratch/data_eng__italian/test_15.pkl', help='path to test file')
 
     parser.add_argument('--q_vocab_path', dest='q_vocab_path', type=str,
                         default='/home/liu1769/multi_ling_search/word_embed/vocab_en.pkl',
                         help='path to vocabulary for queries')
     parser.add_argument('--d_vocab_path', dest='d_vocab_path', type=str,
-                        default='/home/liu1769/multi_ling_search/word_embed/vocab_sw.pkl',
+                        default='/home/liu1769/multi_ling_search/word_embed/vocab_it.pkl',
                         help='path to vocabulary embedding for documents')
     parser.add_argument('--q_extn_embedding', dest='q_extn_embedding', type=str,
                         default='/home/liu1769/multi_ling_search/word_embed/polyglot_en_dict.pkl',
                         help='path to pre-trained embedding for queries')
     parser.add_argument('--d_extn_embedding', dest='d_extn_embedding', type=str,
-                        default='/home/liu1769/multi_ling_search/word_embed/polyglot_sw_dict.pkl',
+                        default='/home/liu1769/multi_ling_search/word_embed/polyglot_it_dict.pkl',
                         help='path to pre-trained embedding for documents')
 
     """
@@ -191,6 +191,7 @@ if __name__ == '__main__':
     # training
     parser.add_argument('--use_gpu', dest='use_gpu', action='store_true', help='whether to use gpu')
     parser.add_argument('--epochs', dest='epochs', type=int, default=10, help='number of epochs to run')
+    parser.add_argument('--train_eval', dest='train_eval', action='store_true', help='whether to evalate training data')
     parser.add_argument('--train_batchsize', dest='train_batchsize', type=int, default=128,
                         help='training minibatch size')
     parser.add_argument('--test_batchsize', dest='test_batchsize', type=int, default=128, help='testing minibatch size')

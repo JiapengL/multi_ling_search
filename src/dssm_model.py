@@ -1,6 +1,3 @@
-"""Two class margin based model
-Author: Cosmo Zhang
-"""
 
 # -*- coding: utf-8 -*-
 import sys
@@ -30,8 +27,8 @@ class SimpleDSSM(nn.Module):
         self.d_word_embeds = nn.Embedding(d_vocab_size, self.embed_dim).to(self.device)
         self.out_dim = 3
         self.crosslin = nn.Linear(self.embed_dim*2, self.out_dim)
-        self.dropout = nn.Dropout(p=0.5)
-        self.batchnorm = nn.BatchNorm1d(args.embed_dim, momentum=0)
+        # self.dropout = nn.Dropout(p=0.5)
+        # self.batchnorm = nn.BatchNorm1d(args.embed_dim, momentum=0)
 
 
 
@@ -104,12 +101,18 @@ class SimpleDSSM(nn.Module):
             y, bs * d_rep_dim
 
         """
+        if self.args.relax_cos:
+            x_n = torch.norm(x, dim=1)
+            y_n = torch.norm(y, dim=1)
+            ret_1 = torch.einsum('bs,bs->b', x, y)
+            norm = (x_n + self.args.epsilon) * (y_n + self.args.epsilon)
 
-        norm_x = F.normalize(x, p=2, dim=1)
-        norm_y = F.normalize(y, p=2, dim=1)
+            ret = torch.div(ret_1, norm)
+        else:
+            norm_x = F.normalize(x, p=2, dim=1)
+            norm_y = F.normalize(y, p=2, dim=1)
 
-        ret = torch.einsum('bs,bs->b', norm_x, norm_y)
-
+            ret = torch.einsum('bs,bs->b', norm_x, norm_y)
         return ret
 
 
@@ -251,18 +254,6 @@ class SimpleDSSM(nn.Module):
             return torch.mean(-1*(loss_type0 + loss_type1 + loss_type2))
 
 
-        elif self.args.leaky_loss:
-            # if using leaky_loss
-
-            loss_theta1 = F.relu(self.__threshold(rels, 1) * (self.theta[0] - sims)).pow(self.args.m)
-            loss_theta2 = F.relu(self.__threshold(rels, 2) * (self.theta[1] - sims)).pow(self.args.m)
-            loss_type0 = (rels == 0).float() * (self.theta[0] + 1 - F.relu(self.theta[0] - sims))/(self.theta[0] + 1)
-            loss_type2 = (rels == 2).float() * (1 - self.theta[1] - F.relu(sims - self.theta[1]))/(1 - self.theta[1])
-            loss_type11 = (np.mean(self.theta) - self.theta[0] - F.relu(sims - self.theta[0])) * torch.lt(sims, np.mean(self.theta)).float()/(np.mean(self.theta) - self.theta[0])
-            loss_type12 = (self.theta[1] - np.mean(self.theta) - F.relu(self.theta[1] - sims)) * torch.gt(sims, np.mean(self.theta)).float()/(self.theta[1] - np.mean(self.theta))
-            loss_type1 = (rels == 1).float() * (loss_type11 + loss_type12)
-            loss_leaky = self.epsilon * (loss_type0 + loss_type1 + loss_type2)
-            return torch.mean(loss_theta1 + loss_theta2 + loss_leaky)
 
         elif self.args.laplace:
             # if using laplace loss
@@ -285,8 +276,9 @@ class SimpleDSSM(nn.Module):
             loss_laplace = self.epsilon * (loss_typel0 + loss_typel1 + loss_typel2)
             return torch.mean(loss_im + loss_laplace)
 
+
         else:
-            # if using ordinal regression loss
+            # if using all threshold ordinal regression loss
             loss_theta1 = F.relu(self.__threshold(rels, 1) * (self.theta[0] - sims)).pow(self.args.m)
             loss_theta2 = F.relu(self.__threshold(rels, 2) * (self.theta[1] - sims)).pow(self.args.m)
             return torch.mean(loss_theta1 + loss_theta2)
@@ -363,7 +355,7 @@ class DeepDSSM(SimpleDSSM):
         self.TOTAL_LETTER_GRAMS = int(1 * 1e5)
         self.WORD_DEPTH = self.WINDOW_SIZE * self.embed_dim
         self.K = 300   # size of filter
-        self.L = 128    # size of output
+        self.L = 64    # size of output
         self.drop_out = nn.Dropout(p=0.5)
         self.q_conv = nn.Conv1d(self.WORD_DEPTH, self.K, 1)
         self.d_conv = nn.Conv1d(self.WORD_DEPTH, self.K, 1)
@@ -375,7 +367,7 @@ class DeepDSSM(SimpleDSSM):
         self.q_fc = nn.Linear(self.K, self.L)
         self.d_fc = nn.Linear(self.K, self.L)
 
-        self.dropout = nn.Dropout(p=0.5)
+        self.dropout = nn.Dropout(p=0.4)
 
 
     def generate_n_gram(self, word_tensor):
@@ -418,21 +410,19 @@ class DeepDSSM(SimpleDSSM):
 
         qs_conv = torch.tanh(self.q_conv(qs_ngram))
         ds_conv = torch.tanh(self.d_conv(ds_ngram))
-
         qs_maxp = self.max_pooling(qs_conv)
         ds_maxp = self.max_pooling(ds_conv)
 
         #qs_maxp = torch.mean(qs_conv, dim=2)
         #ds_maxp = torch.mean(ds_conv, dim=2)
-
-        #qs_drop = self.drop_out(qs_maxp)
-        #ds_drop = self.drop_out(ds_maxp)
+        #
+        # qs_maxp = self.drop_out(qs_maxp)
+        # ds_maxp = self.drop_out(ds_maxp)
 
         qs_sem = self.q_fc(qs_maxp)
         ds_sem = self.d_fc(ds_maxp)
         # pdb.set_trace()
         sims = self.cal_sim(qs_sem, ds_sem)
-
         return sims
 
 
@@ -449,13 +439,18 @@ class LSTM(SimpleDSSM):
         super(LSTM, self).__init__(args, q_vocab_size, d_vocab_size)
 
         # layers for query
-        self.hidden_size = 128
-        self.bilstm = nn.LSTM(self.embed_dim, self.hidden_size, batch_first=True, bidirectional=True)
-        #self.d_bilstm = nn.LSTM(self.embed_dim, self.hidden_size, batch_first=True, bidirectional=True)
+        self.hidden_size = 64
+        self.q_lstm = nn.LSTM(self.embed_dim, self.hidden_size, batch_first=True, bidirectional=True)
+        self.d_lstm = nn.LSTM(self.embed_dim, self.hidden_size, batch_first=True, bidirectional=True)
 
-        self.dropout = nn.Dropout(0.5)
-        self.out_size = 128
-        self.lin = nn.Linear(self.hidden_size*2, self.out_size)
+
+        self.dropout = nn.Dropout(0.4)
+        self.out_size = 64
+        self.q_lin = nn.Linear(self.hidden_size*2, self.out_size)
+        self.d_lin = nn.Linear(self.hidden_size*2, self.out_size)
+
+
+
 
 
 
@@ -464,10 +459,16 @@ class LSTM(SimpleDSSM):
         qs_emb = self.q_word_embeds.forward(qs)
         ds_emb = self.d_word_embeds.forward(ds)
 
+        if self.args.dropout:
+            qs_emb = self.dropout(qs_emb)
+            ds_emb = self.dropout(ds_emb)
+
         self.qs_emb = qs_emb
         self.ds_emb = ds_emb
 
-        self.bilstm.flatten_parameters()
+        self.q_lstm.flatten_parameters()
+        self.d_lstm.flatten_parameters()
+
         """
         #self.d_bilstm.flatten_parameters()
 
@@ -483,18 +484,17 @@ class LSTM(SimpleDSSM):
         q_rep = torch.tanh(torch.mean(qs_emb, dim=1))
         """
 
-        qs_out = self.bilstm(qs_emb)[0]
-        #qs_lin = qs_out.transpose(0, 1)[-1]
-        qs_lin = torch.mean(qs_out, dim=1)
-        q_rep = torch.tanh(self.lin(qs_lin))
+        qs_out = self.q_lstm(qs_emb)[0]
+        qs_lin = qs_out.transpose(0, 1)[0]
+        q_rep = torch.tanh(self.q_lin(qs_lin))
+        # q_rep = torch.tanh(torch.mean(qs_emb, dim=1))
 
 
-        ds_out = self.bilstm(ds_emb)[0]
-        ds_lin = torch.mean(ds_out, dim=1)
-        #ds_lin = ds_out.transpose(0, 1)[-1]
-        d_rep = torch.tanh(self.lin(ds_lin))
+        ds_out = self.d_lstm(ds_emb)[0]
+        ds_lin = ds_out.transpose(0, 1)[0]
+        # ds_lin = ds_out.transpose(0, 1)[-1]
+        d_rep = torch.tanh(self.d_lin(ds_lin))
 
         sims = self.cal_sim(q_rep, d_rep)
-
         return sims
 

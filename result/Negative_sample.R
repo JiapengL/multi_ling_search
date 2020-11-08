@@ -10,18 +10,26 @@ df <- data.frame(neg=neg_sample,
 head(df)
 library(reshape)
 library(ggplot)
+library("ggsci")
 df_1 = melt(df, id="neg")
 names(df_1)[2] <- "Metric"
 
 ggplot(data=df_1, aes(x=neg, y=value, col=Metric))+
-  geom_line()+
+  geom_line(size=1.3)+
+  geom_point()+
   labs(x="Num. NR Docs per Query", y="Ranking Metrics")+  
-  ylim(0.33, 0.98) +
+  ylim(0.33, 1) +
   theme_bw() +
-  theme(legend.position = c(0.87, 0.83), legend.text=element_text(size = 15)) +
-  theme(axis.title.x=element_text(face="italic", size=15)) +
-  theme(axis.title.y=element_text(size=15))+
-  theme(text = element_text(size=15))
+  theme(legend.position = c(0.87, 0.83), legend.text=element_text(size = 20)) +
+  theme(axis.title.x=element_text(face="italic", size=20)) +
+  theme(axis.title.y=element_text(size=20))+
+  theme(text = element_text(size=25))+
+  theme(axis.line = element_line(colour = "black"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank())+
+  scale_color_npg()
+
 
 
 

@@ -30,6 +30,7 @@ class DataProcessor(object):
             if args.vat or args.self:
                 print("loading unlabelled train_data ...")
                 self.raw_train_ul = self._build_data(args.train_ul_file, args.caseless)
+
         else:
             print("loading train_data ...")
             self.raw_train = self._load_data(args.train_file)
@@ -40,7 +41,9 @@ class DataProcessor(object):
             if args.vat or args.self:
                 print("loading unlabelled train_data ...")
                 self.raw_train_ul = self._load_data(args.train_ul_file)
-
+            if args.train_eval:
+                print("loading train_data_2 ...")
+                self.raw_train_2 = self._load_data(args.train_file)
 
     def build_vocab(self):
         """Build the vocabulary for sentence pairs in the training set, vocab outside this will be considered as <unk>
@@ -135,6 +138,8 @@ class DataProcessor(object):
             data_ls = self.raw_test
         elif dataset == "unlabel":
             data_ls = self.raw_train_ul
+        elif dataset == "train_2":
+            data_ls = self.raw_train_2
 
         if is_shuffle:
             random.shuffle(data_ls)
@@ -228,6 +233,8 @@ class DataProcessor(object):
             data_ls = self.raw_test
         elif set == "train":
             data_ls = self.raw_train
+        elif set == "train_2":
+            data_ls = self.raw_train_2
 
         for i, line in enumerate(data_ls):
             count += 1

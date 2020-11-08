@@ -145,7 +145,52 @@ def eval_model(args, model, data_processor, vocab_q, vocab_d, device, epoch, dev
     if epoch > 10:
         scheduler.step()
     """
-    return dev_precision_nn, dev_precision_2, dev_precision_21, dev_ndcg, dev_map, dev_mrr_nn, dev_mrr_2
+    return dev_precision_nn, dev_precision_2, dev_precision_21, dev_ndcg, dev_map, dev_mrr_nn, dev_mrr_2, sims_dev
+
+
+
+
+
+
+
+
+
+
+
+def train_model_result(args, model, data_processor, vocab_q, vocab_d, device, epoch, qd_index, rels_index):
+    """
+    model evaluation
+    """
+
+    model.eval()
+    loss_dev = []
+    sims_dev = torch.tensor([]).to(device) if args.use_gpu else torch.tensor([])
+    for dev_batch in data_processor.generate_batch(args.train_batchsize, is_shuffle=False, dataset="train_2"):
+
+        rels_dev, qs_dev, ds_dev = numerize(dev_batch, vocab_q, vocab_d)
+        if args.use_gpu:
+            rels_dev, qs_dev, ds_dev = rels_dev.to(device), qs_dev.to(device), ds_dev.to(device)
+
+        sims = model(qs_dev, ds_dev)
+        sims_dev = torch.cat([sims_dev, sims.data])
+
+        loss = model.cal_loss(sims, rels_dev)
+        loss_dev.append(loss.item())
+
+    # evaluation
+    dev_map, dev_mrr_nn, dev_mrr_2 = eval.map_mrr(sims_dev, qd_index, rels_index)
+    dev_precision_nn, dev_precision_2, dev_precision_21 = eval.precision_at_k(sims_dev, qd_index, rels_index, 5)
+    dev_ndcg = eval.ndcg_at_k(sims_dev, qd_index, rels_index, 5)
+
+    if epoch % 5 == 0:
+        print(
+            'Epoch {}: train loss: {:05.5f}; train precision_2  @ 1: {:05.3f}; train precision_2  @ 5: {:05.3f}; train precision_nn  @ 5: {:05.3f}; train ndcg  @ 5: {:05.3f}'
+                .format(epoch, np.mean(loss_dev), dev_precision_21, dev_precision_2, dev_precision_nn, dev_ndcg))
+        print(
+            'Epoch {}: train map: {:05.3f}; train mrr_nn: {:05.3f}; train mrr_2: {:05.3f}'
+                .format(epoch, dev_map, dev_mrr_nn, dev_mrr_2))
+        # prediction matrix
+    return  sims_dev
 
 
 
